@@ -1,5 +1,7 @@
 import time
 
+from config.setting import FRAME_LIMIT
+from config.setting import INFLUX_URL, INFLUX_TOKEN, INFLUX_ORG, INFLUX_BUCKET
 from detection.model import get_detections
 from processing.analyzer import process
 from display.hmi import show
@@ -27,9 +29,10 @@ while True:
 
     print(result)
 
-    # STEP 5: batch control
+    # STEP 5: batch control (CLEAN + CONFIG-BASED)
     frame_count += 1
-    if frame_count > 20:
+
+    if frame_count >= FRAME_LIMIT:
         frame_count = 0
         batch_id = batch_manager.new_batch()
         print(f"\nNEW BATCH: {batch_id}\n")
