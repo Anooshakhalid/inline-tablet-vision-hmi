@@ -1,0 +1,2 @@
+# inline-tablet-vision-hmi
+
