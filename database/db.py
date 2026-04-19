@@ -1,36 +1,25 @@
-import sqlite3
+from influxdb_client_3 import InfluxDBClient3, Point
+import time
+import os
 
-conn = sqlite3.connect("inspection.db")
-cursor = conn.cursor()
+# Load from environment variables (.env)
+INFLUX_URL = os.getenv("INFLUX_URL")
+INFLUX_TOKEN = os.getenv("INFLUX_TOKEN")
+INFLUX_ORG = os.getenv("INFLUX_ORG")
+INFLUX_BUCKET = os.getenv("INFLUX_BUCKET")
 
-def init_db():
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS results (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        time TEXT,
-        batch_id TEXT,
-        total INTEGER,
-        normal INTEGER,
-        chipped INTEGER,
-        capped INTEGER,
-        status TEXT
-    )
-    """)
-    conn.commit()
+client = InfluxDBClient3(
+    host=INFLUX_URL,
+    token=INFLUX_TOKEN,
+    org=INFLUX_ORG
+)
 
+def save_to_influx(batch_id, tablet_count, defect_count):
 
-def save_to_db(data):
-    cursor.execute("""
-    INSERT INTO results (time, batch_id, total, normal, chipped, capped, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (
-        data["time"],
-        data["batch_id"],
-        data["total"],
-        data["normal"],
-        data["chipped"],
-        data["capped"],
-        data["status"]
-    ))
+    point = Point("tablet_detection") \
+        .tag("batch_id", batch_id) \
+        .field("tablet_count", tablet_count) \
+        .field("defect_count", defect_count) \
+        .time(time.time_ns())
 
-    conn.commit()
+    client.write(database=INFLUX_BUCKET, record=point)
