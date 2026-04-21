@@ -1,25 +1,21 @@
 from influxdb_client_3 import InfluxDBClient3, Point
-import time
-import os
-
-# Load from environment variables (.env)
-INFLUX_URL = os.getenv("INFLUX_URL")
-INFLUX_TOKEN = os.getenv("INFLUX_TOKEN")
-INFLUX_ORG = os.getenv("INFLUX_ORG")
-INFLUX_BUCKET = os.getenv("INFLUX_BUCKET")
+from config.setting import INFLUX_URL, INFLUX_TOKEN, INFLUX_BUCKET
+from datetime import datetime
 
 client = InfluxDBClient3(
     host=INFLUX_URL,
     token=INFLUX_TOKEN,
-    org=INFLUX_ORG
 )
 
-def save_to_influx(batch_id, tablet_count, defect_count):
+def save_to_influx(result):
 
     point = Point("tablet_detection") \
-        .tag("batch_id", batch_id) \
-        .field("tablet_count", tablet_count) \
-        .field("defect_count", defect_count) \
-        .time(time.time_ns())
+        .tag("batch_id", result["batch_id"]) \
+        .field("tablet_count", result["total"]) \
+        .field("normal", result["normal"]) \
+        .field("chipped", result["chipped"]) \
+        .field("capped", result["capped"]) \
+        .field("status", result["status"]) \
+        .time(datetime.fromisoformat(result["time"]))
 
     client.write(database=INFLUX_BUCKET, record=point)
