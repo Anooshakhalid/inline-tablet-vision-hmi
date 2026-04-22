@@ -1,14 +1,21 @@
-import random
+from ultralytics import YOLO
 
-CLASSES = ["normal", "chipped", "capped"]
+# Load your trained model
+model = YOLO("models/best.pt")
 
-def get_detections():
+def get_detections(image_path):
+    results = model(image_path)
+
     detections = []
 
-    for _ in range(random.randint(1, 5)):
-        detections.append({
-            "class": random.choice(CLASSES),
-            "confidence": round(random.uniform(0.7, 0.99), 2)
-        })
+    for r in results:
+        for box in r.boxes:
+            cls_id = int(box.cls[0])
+            conf = float(box.conf[0])
+
+            detections.append({
+                "class": model.names[cls_id],
+                "confidence": round(conf, 2)
+            })
 
     return detections
