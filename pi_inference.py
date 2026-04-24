@@ -46,7 +46,20 @@ while True:
 
     print(f"[INFO] Defects: {defect_count}")
 
-    # send to PC (InfluxDB via API)
+    # =========================
+    # DRAW RESULTS (OPEN CV WINDOW)
+    # =========================
+    annotated_frame = r.plot()
+
+    cv2.imshow("Tablet QC - Detection", annotated_frame)
+
+    # press 'q' to quit
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+    # =========================
+    # SEND DATA TO PC (InfluxDB API)
+    # =========================
     payload = {
         "defects": defect_count,
         "timestamp": time.time()
@@ -62,3 +75,9 @@ while True:
         print("[WARN] Send failed:", e)
 
     time.sleep(0.01)
+
+# =========================
+# CLEANUP
+# =========================
+cap.release()
+cv2.destroyAllWindows()
