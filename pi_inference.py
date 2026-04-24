@@ -6,8 +6,8 @@ from ultralytics import YOLO
 # =========================
 # CONFIG (EDIT THIS)
 # =========================
-PC_API_URL = "http://YOUR_PC_IP:8086/api/v2/write"
-MODEL_PATH = "models/yolov8n.pt"
+PC_API_URL = "http://192.168.100.7:8086/api/v2/write"
+MODEL_PATH = "models/best.pt"
 FRAME_SIZE = 320
 DEVICE = "cpu"
 
