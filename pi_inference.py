@@ -1,98 +1,104 @@
 import cv2
 import time
-import requests
-import os
+import threading
+from flask import Flask, Response
 from ultralytics import YOLO
 
 # =========================
 # CONFIG
 # =========================
-PC_API_URL = "http://192.168.100.7:8086/api/v2/write"
 MODEL_PATH = "models/best.pt"
 FRAME_SIZE = 320
 DEVICE = "cpu"
 
-SHOW_WINDOW = False   # will auto-enable if display exists
-
-# =========================
-# AUTO DISPLAY CHECK
-# =========================
-if "DISPLAY" in os.environ:
-    SHOW_WINDOW = True
-
-# =========================
-# LOAD MODEL
-# =========================
+app = Flask(__name__)
 model = YOLO(MODEL_PATH)
 
-# =========================
-# CAMERA INIT
-# =========================
 cap = cv2.VideoCapture(0)
 
 if not cap.isOpened():
     raise RuntimeError("Camera not accessible")
 
-print("[INFO] Pi Inference Started")
+print("[INFO] System Starting...")
+
+# Shared frame
+latest_frame = None
+lock = threading.Lock()
 
 # =========================
-# LOOP
+# INFERENCE THREAD
 # =========================
-while True:
+def inference_loop():
+    global latest_frame
 
-    ret, frame = cap.read()
-    if not ret:
-        continue
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            continue
 
-    frame = cv2.resize(frame, (FRAME_SIZE, FRAME_SIZE))
+        frame = cv2.resize(frame, (FRAME_SIZE, FRAME_SIZE))
 
-    # YOLO inference
-    results = model(frame, imgsz=320, device=DEVICE)
+        results = model(frame, imgsz=320, device=DEVICE)
+        r = results[0]
 
-    r = results[0]
-    defect_count = len(r.boxes)
+        defect_count = len(r.boxes)
+        print(f"[INFO] Defects: {defect_count}")
 
-    print(f"[INFO] Defects: {defect_count}")
+        # SAFE DRAWING (NO r.plot())
+        annotated = frame.copy()
 
-    # =========================
-    # DRAW OUTPUT
-    # =========================
-    annotated_frame = r.plot()
+        for box in r.boxes:
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            conf = float(box.conf[0])
 
-    # =========================
-    # SAFE VISUALIZATION
-    # =========================
-    if SHOW_WINDOW:
-        cv2.imshow("Tablet QC - Detection", annotated_frame)
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(
+                annotated,
+                f"{conf:.2f}",
+                (x1, y1 - 5),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 255, 0),
+                1
+            )
 
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-    else:
-        # fallback: save preview frame (optional)
-        cv2.imwrite("latest_frame.jpg", annotated_frame)
+        with lock:
+            latest_frame = annotated
 
-    # =========================
-    # SEND TO PC
-    # =========================
-    payload = {
-        "defects": defect_count,
-        "timestamp": time.time()
-    }
-
-    try:
-        requests.post(
-            PC_API_URL,
-            json=payload,
-            timeout=0.5
-        )
-    except Exception as e:
-        print("[WARN] Send failed:", e)
-
-    time.sleep(0.01)
+        time.sleep(0.01)
 
 # =========================
-# CLEANUP
+# STREAM GENERATOR
 # =========================
-cap.release()
-if SHOW_WINDOW:
-    cv2.destroyAllWindows()
+def generate():
+    global latest_frame
+
+    while True:
+        with lock:
+            if latest_frame is None:
+                continue
+            frame = latest_frame.copy()
+
+        _, buffer = cv2.imencode('.jpg', frame)
+        frame_bytes = buffer.tobytes()
+
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
+# =========================
+# FLASK ROUTE
+# =========================
+@app.route('/')
+def video_feed():
+    return Response(generate(),
+                    mimetype='multipart/x-mixed-replace; boundary=frame')
+
+# =========================
+# START EVERYTHING
+# =========================
+if __name__ == "__main__":
+
+    t = threading.Thread(target=inference_loop, daemon=True)
+    t.start()
+
+    app.run(host='0.0.0.0', port=5000, debug=False)
