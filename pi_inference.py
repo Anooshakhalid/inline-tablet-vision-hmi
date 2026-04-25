@@ -1,15 +1,24 @@
 import cv2
 import time
 import requests
+import os
 from ultralytics import YOLO
 
 # =========================
-# CONFIG (EDIT THIS)
+# CONFIG
 # =========================
 PC_API_URL = "http://192.168.100.7:8086/api/v2/write"
 MODEL_PATH = "models/best.pt"
 FRAME_SIZE = 320
 DEVICE = "cpu"
+
+SHOW_WINDOW = False   # will auto-enable if display exists
+
+# =========================
+# AUTO DISPLAY CHECK
+# =========================
+if "DISPLAY" in os.environ:
+    SHOW_WINDOW = True
 
 # =========================
 # LOAD MODEL
@@ -27,7 +36,7 @@ if not cap.isOpened():
 print("[INFO] Pi Inference Started")
 
 # =========================
-# INFERENCE LOOP
+# LOOP
 # =========================
 while True:
 
@@ -35,7 +44,6 @@ while True:
     if not ret:
         continue
 
-    # resize for edge performance
     frame = cv2.resize(frame, (FRAME_SIZE, FRAME_SIZE))
 
     # YOLO inference
@@ -47,18 +55,24 @@ while True:
     print(f"[INFO] Defects: {defect_count}")
 
     # =========================
-    # DRAW RESULTS (OPEN CV WINDOW)
+    # DRAW OUTPUT
     # =========================
     annotated_frame = r.plot()
 
-    cv2.imshow("Tablet QC - Detection", annotated_frame)
+    # =========================
+    # SAFE VISUALIZATION
+    # =========================
+    if SHOW_WINDOW:
+        cv2.imshow("Tablet QC - Detection", annotated_frame)
 
-    # press 'q' to quit
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+    else:
+        # fallback: save preview frame (optional)
+        cv2.imwrite("latest_frame.jpg", annotated_frame)
 
     # =========================
-    # SEND DATA TO PC (InfluxDB API)
+    # SEND TO PC
     # =========================
     payload = {
         "defects": defect_count,
@@ -80,4 +94,5 @@ while True:
 # CLEANUP
 # =========================
 cap.release()
-cv2.destroyAllWindows()
+if SHOW_WINDOW:
+    cv2.destroyAllWindows()
