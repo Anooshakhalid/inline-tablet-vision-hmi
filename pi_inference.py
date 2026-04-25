@@ -19,9 +19,12 @@ cap = cv2.VideoCapture(0)
 if not cap.isOpened():
     raise RuntimeError("Camera not accessible")
 
-print("[INFO] System Starting...")
+# 🔥 FIX CAMERA BUFFER (important for smooth video)
+cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+cap.set(cv2.CAP_PROP_FPS, 30)
 
-# Shared frame
+print("[INFO] System Started")
+
 latest_frame = None
 lock = threading.Lock()
 
@@ -36,15 +39,12 @@ def inference_loop():
         if not ret:
             continue
 
-        frame = cv2.resize(frame, (FRAME_SIZE, FRAME_SIZE))
+        # FIX: stable resize
+        frame = cv2.resize(frame, (FRAME_SIZE, FRAME_SIZE), interpolation=cv2.INTER_LINEAR)
 
         results = model(frame, imgsz=320, device=DEVICE)
         r = results[0]
 
-        defect_count = len(r.boxes)
-        print(f"[INFO] Defects: {defect_count}")
-
-        # SAFE DRAWING (NO r.plot())
         annotated = frame.copy()
 
         for box in r.boxes:
@@ -62,10 +62,12 @@ def inference_loop():
                 1
             )
 
+        # FIX: safe frame update
         with lock:
             latest_frame = annotated
 
-        time.sleep(0.01)
+        # FIX: stable FPS (~30)
+        time.sleep(0.03)
 
 # =========================
 # STREAM GENERATOR
@@ -79,11 +81,14 @@ def generate():
                 continue
             frame = latest_frame.copy()
 
-        _, buffer = cv2.imencode('.jpg', frame)
-        frame_bytes = buffer.tobytes()
+        # FIX: better encoding quality (reduces flicker)
+        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 85]
+        _, buffer = cv2.imencode('.jpg', frame, encode_param)
 
         yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+               b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+
+        time.sleep(0.03)
 
 # =========================
 # FLASK ROUTE
@@ -94,11 +99,11 @@ def video_feed():
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
 # =========================
-# START EVERYTHING
+# START SYSTEM
 # =========================
 if __name__ == "__main__":
 
     t = threading.Thread(target=inference_loop, daemon=True)
     t.start()
 
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
