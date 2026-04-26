@@ -3,7 +3,6 @@ import time
 from config.setting import FRAME_LIMIT
 from detection.model import get_detections
 from processing.analyzer import process
-from display.hmi import show
 from database.db import save_to_influx
 from utils.batch_manager import BatchManager
 from camera.capture import get_frame
