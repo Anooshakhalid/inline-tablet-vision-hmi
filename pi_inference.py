@@ -15,7 +15,7 @@ from utils.batch_manager import BatchManager
 # =========================
 # CONFIG
 # =========================
-MODEL_PATH = "models/bestt.t"
+MODEL_PATH = "models/bestt.pt"
 FRAME_SIZE = 320
 DEVICE = "cpu"
 FRAME_LIMIT = 50   # batch size
