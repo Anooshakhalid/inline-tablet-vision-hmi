@@ -8,27 +8,32 @@ def process(detections, batch_id):
             "batch_id": batch_id,
             "total": 0,
             "normal": 0,
-            "chipped": 0,
-            "capped": 0,
+            "chip": 0,
+            "cap": 0,
             "status": "NO_DETECTION"
         }
 
-    detections = [d for d in detections if d["confidence"] > 0.5]
+    # normalize class names
+    detections = [
+        {**d, "class": d["class"].lower().strip()}
+        for d in detections
+        if d["confidence"] > 0.5
+    ]
 
     normal = sum(1 for d in detections if d["class"] == "normal")
-    chipped = sum(1 for d in detections if d["class"] == "chipped")
-    capped = sum(1 for d in detections if d["class"] == "capped")
+    chip = sum(1 for d in detections if d["class"] == "chip")
+    cap = sum(1 for d in detections if d["class"] == "cap")
 
     total = len(detections)
 
-    status = "FAIL" if (chipped + capped) > 0 else "PASS"
+    status = "FAIL" if (chip + cap) > 0 else "PASS"
 
     return {
         "time": datetime.now().isoformat(),
         "batch_id": batch_id,
         "total": total,
         "normal": normal,
-        "chipped": chipped,
-        "capped": capped,
+        "chip": chip,
+        "cap": cap,
         "status": status
     }
