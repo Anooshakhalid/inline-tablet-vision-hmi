@@ -1,21 +1,36 @@
-from influxdb_client_3 import InfluxDBClient3, Point
-from config.setting import INFLUX_URL, INFLUX_TOKEN, INFLUX_BUCKET
+from influxdb_client import InfluxDBClient, Point, WritePrecision
+from config.setting import INFLUX_URL, INFLUX_TOKEN, INFLUX_BUCKET, INFLUX_ORG
 from datetime import datetime
 
-client = InfluxDBClient3(
-    host=INFLUX_URL,
+# =========================
+# CLIENT (InfluxDB v2)
+# =========================
+client = InfluxDBClient(
+    url=INFLUX_URL,
     token=INFLUX_TOKEN,
+    org=INFLUX_ORG
 )
 
+write_api = client.write_api()
+
+# =========================
+# SAVE FUNCTION
+# =========================
 def save_to_influx(result):
 
-    point = Point("tablet_detection") \
-        .tag("batch_id", result["batch_id"]) \
-        .field("tablet_count", result["total"]) \
-        .field("normal", result["normal"]) \
-        .field("chipped", result["chipped"]) \
-        .field("capped", result["capped"]) \
-        .field("status", result["status"]) \
-        .time(datetime.fromisoformat(result["time"]))
+    point = (
+        Point("tablet_detection")
+        .tag("batch_id", result["batch_id"])
+        .field("tablet_count", int(result["total"]))
+        .field("normal", int(result["normal"]))
+        .field("chipped", int(result["chipped"]))
+        .field("capped", int(result["capped"]))
+        .field("status", result["status"])
+        .time(datetime.fromisoformat(result["time"]), WritePrecision.NS)
+    )
 
-    client.write(database=INFLUX_BUCKET, record=point)
+    write_api.write(
+        bucket=INFLUX_BUCKET,
+        org=INFLUX_ORG,
+        record=point
+    )
