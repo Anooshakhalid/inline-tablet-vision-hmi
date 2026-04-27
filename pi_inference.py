@@ -26,7 +26,7 @@ FRAME_LIMIT = 50   # batch size
 app = Flask(__name__)
 model = YOLO(MODEL_PATH)
 
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(1)
 
 if not cap.isOpened():
     raise RuntimeError("Camera not accessible")
