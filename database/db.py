@@ -1,6 +1,7 @@
 from influxdb_client import InfluxDBClient, Point, WritePrecision
 from config.setting import INFLUX_URL, INFLUX_TOKEN, INFLUX_BUCKET, INFLUX_ORG
 from datetime import datetime
+from influxdb_client.client.write_api import SYNCHRONOUS
 
 # =========================
 # CLIENT (InfluxDB v2)
@@ -11,7 +12,7 @@ client = InfluxDBClient(
     org=INFLUX_ORG
 )
 
-write_api = client.write_api()
+write_api = client.write_api(write_options=SYNCHRONOUS)
 
 # =========================
 # SAVE FUNCTION
@@ -24,8 +25,8 @@ def save_to_influx(result):
             .tag("status", str(result["status"]))  
             .field("tablet_count", int(result["total"]))
             .field("normal", int(result["normal"]))
-            .field("chipped", int(result["chipped"]))
-            .field("capped", int(result["capped"]))
+            .field("chip", int(result["chip"]))
+            .field("cap", int(result["cap"]))
             .time(datetime.utcnow(), WritePrecision.NS)  
         )
 
