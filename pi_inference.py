@@ -39,18 +39,18 @@ print("[INFO] System Started")
 # RTSP STREAM (FFMPEG)
 # =========================
 ffmpeg = subprocess.Popen([
-    'ffmpeg',
-    '-y',
-    '-f', 'rawvideo',
-    '-pix_fmt', 'bgr24',
-    '-s', '320x320',
-    '-r', '30',
-    '-i', '-',
-    '-c:v', 'libx264',
-    '-preset', 'ultrafast',
-    '-tune', 'zerolatency',
-    '-f', 'rtsp',
-    'rtsp://localhost:8554/live'
+    "ffmpeg",
+    "-loglevel", "error",
+    "-f", "rawvideo",
+    "-pix_fmt", "bgr24",
+    "-s", "320x320",
+    "-r", "30",
+    "-i", "-",
+    "-c:v", "libx264",
+    "-preset", "ultrafast",
+    "-tune", "zerolatency",
+    "-f", "rtsp",
+    "rtsp://localhost:8554/live"
 ], stdin=subprocess.PIPE)
 
 # =========================
