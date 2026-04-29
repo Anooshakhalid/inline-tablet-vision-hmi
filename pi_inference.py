@@ -1,12 +1,9 @@
 import cv2
 import time
 import threading
-import subprocess
+from flask import Flask, Response
 from ultralytics import YOLO
 
-# =========================
-# YOUR MODULES
-# =========================
 from processing.analyzer import process
 from database.db import save_to_influx
 from utils.batch_manager import BatchManager
@@ -19,14 +16,13 @@ FRAME_SIZE = 320
 DEVICE = "cpu"
 FRAME_LIMIT = 50
 
-CAM_URL = "http://192.168.100.49:8080/video"
-
 # =========================
 # INIT
 # =========================
+app = Flask(__name__)
 model = YOLO(MODEL_PATH)
 
-cap = cv2.VideoCapture(CAM_URL, cv2.CAP_FFMPEG)
+cap = cv2.VideoCapture("http://192.168.100.49:8080/video", cv2.CAP_FFMPEG)
 
 if not cap.isOpened():
     raise RuntimeError("Camera not accessible")
@@ -36,35 +32,21 @@ cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 print("[INFO] System Started")
 
 # =========================
-# RTSP STREAM (FFMPEG)
+# SHARED STATE (IMPORTANT FOR LOW LAG)
 # =========================
-ffmpeg = subprocess.Popen([
-    "ffmpeg",
-    "-loglevel", "error",
-    "-f", "rawvideo",
-    "-pix_fmt", "bgr24",
-    "-s", "320x320",
-    "-r", "30",
-    "-i", "-",
-    "-c:v", "libx264",
-    "-preset", "ultrafast",
-    "-tune", "zerolatency",
-    "-f", "rtsp",
-    "rtsp://localhost:8554/live"
-], stdin=subprocess.PIPE)
+latest_frame = None
+lock = threading.Lock()
 
-# =========================
-# STATE
-# =========================
 batch_manager = BatchManager()
 batch_id = batch_manager.new_batch()
 frame_count = 0
 
+
 # =========================
-# INFERENCE LOOP
+# INFERENCE THREAD
 # =========================
 def inference_loop():
-    global batch_id, frame_count
+    global latest_frame, batch_id, frame_count
 
     while True:
         ret, frame = cap.read()
@@ -73,7 +55,7 @@ def inference_loop():
 
         frame = cv2.resize(frame, (FRAME_SIZE, FRAME_SIZE))
 
-        results = model(frame, imgsz=320, device=DEVICE)
+        results = model(frame, imgsz=320, device=DEVICE, verbose=False)
         r = results[0]
 
         detections = []
@@ -98,7 +80,7 @@ def inference_loop():
         print("QC RESULT:", result)
 
         # =========================
-        # DRAW BOXES
+        # DRAW
         # =========================
         annotated = frame.copy()
 
@@ -109,40 +91,73 @@ def inference_loop():
             color = (0, 255, 0) if label == "normal" else (0, 0, 255)
 
             cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(
-                annotated,
-                label,
-                (x1, y1 - 5),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                color,
-                1
-            )
+            cv2.putText(annotated, label, (x1, y1 - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
         # =========================
-        # PUSH TO RTSP (IMPORTANT PART)
+        # ONLY KEEP LATEST FRAME (NO QUEUE = NO LAG)
         # =========================
-        ffmpeg.stdin.write(annotated.tobytes())
+        with lock:
+            latest_frame = annotated.copy()
 
         # =========================
         # BATCH CONTROL
         # =========================
         frame_count += 1
-
         if frame_count >= FRAME_LIMIT:
             frame_count = 0
             batch_id = batch_manager.new_batch()
             print(f"\nNEW BATCH: {batch_id}\n")
 
-        time.sleep(0.03)
+        # small yield (prevents CPU lock)
+        time.sleep(0.005)
+
+
+# =========================
+# FAST STREAM GENERATOR
+# =========================
+def generate():
+    global latest_frame
+
+    while True:
+        with lock:
+            if latest_frame is None:
+                continue
+            frame = latest_frame
+
+        # 🔥 LOWER QUALITY = LOWER LATENCY
+        _, buffer = cv2.imencode(
+            '.jpg',
+            frame,
+            [cv2.IMWRITE_JPEG_QUALITY, 60]
+        )
+
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' +
+               buffer.tobytes() + b'\r\n')
+
+
+# =========================
+# ROUTE
+# =========================
+@app.route('/')
+def video_feed():
+    return Response(
+        generate(),
+        mimetype='multipart/x-mixed-replace; boundary=frame'
+    )
+
 
 # =========================
 # START
 # =========================
 if __name__ == "__main__":
-
     t = threading.Thread(target=inference_loop, daemon=True)
     t.start()
 
-    while True:
-        time.sleep(1)
+    app.run(
+        host="0.0.0.0",
+        port=5000,
+        threaded=True,
+        debug=False
+    )
