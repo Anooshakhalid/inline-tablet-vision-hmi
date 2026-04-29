@@ -43,9 +43,12 @@ ffmpeg = subprocess.Popen([
     '-y',
     '-f', 'rawvideo',
     '-pix_fmt', 'bgr24',
-    '-s', f'{FRAME_SIZE}x{FRAME_SIZE}',
+    '-s', '320x320',
     '-r', '30',
     '-i', '-',
+    '-c:v', 'libx264',
+    '-preset', 'ultrafast',
+    '-tune', 'zerolatency',
     '-f', 'rtsp',
     'rtsp://localhost:8554/live'
 ], stdin=subprocess.PIPE)
