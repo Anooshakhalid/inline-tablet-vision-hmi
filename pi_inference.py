@@ -1,9 +1,8 @@
 import cv2
 import time
 import threading
-from flask import Flask, Response
+import subprocess
 from ultralytics import YOLO
-from datetime import datetime
 
 # =========================
 # YOUR MODULES
@@ -18,38 +17,51 @@ from utils.batch_manager import BatchManager
 MODEL_PATH = "models/bestt.pt"
 FRAME_SIZE = 320
 DEVICE = "cpu"
-FRAME_LIMIT = 50   # batch size
+FRAME_LIMIT = 50
+
+CAM_URL = "http://192.168.100.49:8080/video"
 
 # =========================
 # INIT
 # =========================
-app = Flask(__name__)
 model = YOLO(MODEL_PATH)
 
-cap = cv2.VideoCapture("http://192.168.100.49:8080/video", cv2.CAP_FFMPEG)
+cap = cv2.VideoCapture(CAM_URL, cv2.CAP_FFMPEG)
 
 if not cap.isOpened():
     raise RuntimeError("Camera not accessible")
 
-# camera stability
 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-cap.set(cv2.CAP_PROP_FPS, 30)
 
 print("[INFO] System Started")
 
-latest_frame = None
-lock = threading.Lock()
+# =========================
+# RTSP STREAM (FFMPEG)
+# =========================
+ffmpeg = subprocess.Popen([
+    'ffmpeg',
+    '-y',
+    '-f', 'rawvideo',
+    '-pix_fmt', 'bgr24',
+    '-s', f'{FRAME_SIZE}x{FRAME_SIZE}',
+    '-r', '30',
+    '-i', '-',
+    '-f', 'rtsp',
+    'rtsp://localhost:8554/live'
+], stdin=subprocess.PIPE)
 
-# batch system
+# =========================
+# STATE
+# =========================
 batch_manager = BatchManager()
 batch_id = batch_manager.new_batch()
 frame_count = 0
 
 # =========================
-# INFERENCE THREAD
+# INFERENCE LOOP
 # =========================
 def inference_loop():
-    global latest_frame, frame_count, batch_id
+    global batch_id, frame_count
 
     while True:
         ret, frame = cap.read()
@@ -61,9 +73,6 @@ def inference_loop():
         results = model(frame, imgsz=320, device=DEVICE)
         r = results[0]
 
-        # =========================
-        # CONVERT YOLO → detections list
-        # =========================
         detections = []
 
         for box in r.boxes:
@@ -76,14 +85,8 @@ def inference_loop():
                 "confidence": conf
             })
 
-        # =========================
-        # PROCESS LOGIC
-        # =========================
         result = process(detections, batch_id)
 
-        # =========================
-        # SAVE TO INFLUX
-        # =========================
         try:
             save_to_influx(result)
         except Exception as e:
@@ -114,10 +117,9 @@ def inference_loop():
             )
 
         # =========================
-        # UPDATE FRAME (THREAD SAFE)
+        # PUSH TO RTSP (IMPORTANT PART)
         # =========================
-        with lock:
-            latest_frame = annotated
+        ffmpeg.stdin.write(annotated.tobytes())
 
         # =========================
         # BATCH CONTROL
@@ -131,17 +133,8 @@ def inference_loop():
 
         time.sleep(0.03)
 
-
 # =========================
-# ROUTE
-# =========================
-@app.route('/')
-def video_feed():
-    return Response(generate(),
-                    mimetype='multipart/x-mixed-replace; boundary=frame')
-
-# =========================
-# START SYSTEM
+# START
 # =========================
 if __name__ == "__main__":
 
