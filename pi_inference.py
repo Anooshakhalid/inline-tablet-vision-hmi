@@ -131,24 +131,6 @@ def inference_loop():
 
         time.sleep(0.03)
 
-# =========================
-# FLASK STREAM
-# =========================
-def generate():
-    global latest_frame
-
-    while True:
-        with lock:
-            if latest_frame is None:
-                continue
-            frame = latest_frame.copy()
-
-        _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
-
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-
-        time.sleep(0.03)
 
 # =========================
 # ROUTE
@@ -166,4 +148,5 @@ if __name__ == "__main__":
     t = threading.Thread(target=inference_loop, daemon=True)
     t.start()
 
-    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+    while True:
+        time.sleep(1)
