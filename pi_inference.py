@@ -26,8 +26,7 @@ frame_count = 0
 # =========================
 model = YOLO(MODEL_PATH)
 
-# Use faster backend (important)
-cap = cv2.VideoCapture(0)  # Windows (use CAP_V4L2 on Linux)
+cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
 if not cap.isOpened():
@@ -51,7 +50,7 @@ batch_id = batch_manager.new_batch()
 print("[INFO] Connected. Streaming...")
 
 # =========================
-# NON-BLOCKING SEND
+# ASYNC SEND
 # =========================
 def send_frame(sock, message):
     try:
@@ -68,7 +67,7 @@ while True:
         continue
 
     # =========================
-    # YOLO
+    # YOLO INFERENCE
     # =========================
     results = model(
         frame,
@@ -79,6 +78,10 @@ while True:
     )
 
     r = results[0]
+
+    # =========================
+    # YOUR LOGIC (UNCHANGED)
+    # =========================
     detections = []
 
     for box in r.boxes:
@@ -91,9 +94,6 @@ while True:
             "confidence": conf
         })
 
-    # =========================
-    # PROCESS
-    # =========================
     result = process(detections, batch_id)
 
     try:
@@ -113,23 +113,27 @@ while True:
         print(f"\nNEW BATCH: {batch_id}\n")
 
     # =========================
-    # DRAW
+    # 🔥 EXACT COLAB VISUALIZATION
     # =========================
-    for d, box in zip(detections, r.boxes):
-        x1, y1, x2, y2 = map(int, box.xyxy[0])
-        label = f"{d['class']} {d['confidence']:.2f}"
-
-        color = (0, 255, 0) if d["class"] in ["normal", "tablet"] else (0, 0, 255)
-
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        cv2.putText(frame, label, (x1, y1 - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+    annotated_frame = r.plot()
 
     # =========================
-    # SEND FRAME (ASYNC)
+    # DISPLAY (REAL TIME)
+    # =========================
+    cv2.imshow("QC LIVE", annotated_frame)
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+    # =========================
+    # SEND TO LAPTOP (ASYNC)
     # =========================
     try:
-        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 50])
+        _, buffer = cv2.imencode(
+            '.jpg',
+            annotated_frame,
+            [cv2.IMWRITE_JPEG_QUALITY, 50]
+        )
         data = buffer.tobytes()
         message = struct.pack("Q", len(data)) + data
 
@@ -144,7 +148,7 @@ while True:
         break
 
 # =========================
-# CLEANUP --
+# CLEANUP
 # =========================
 cap.release()
 cv2.destroyAllWindows()
