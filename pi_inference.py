@@ -27,7 +27,7 @@ frame_count = 0
 model = YOLO(MODEL_PATH)
 
 # Use faster backend (important)
-cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)  # Windows (use CAP_V4L2 on Linux)
+cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)  # Windows (use CAP_V4L2 on Linux)
 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
 if not cap.isOpened():
