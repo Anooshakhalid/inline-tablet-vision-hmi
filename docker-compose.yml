@@ -12,7 +12,7 @@ services:
       - DOCKER_INFLUXDB_INIT_PASSWORD=admin123
       - DOCKER_INFLUXDB_INIT_ORG=tablet-org
       - DOCKER_INFLUXDB_INIT_BUCKET=tablet-bucket
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=bm8Efbl-EZaDyvIv6JOxJ6YUH9VKgcJhHBnFabRFPYKXocq2Yc9al-svsRJwYC4aW82Glr5EvhDn4GL4BKu3gg==
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=wKmGoYc_UR_4a27K6fXUHo24ATaZRhHP2TwVBNxEwl83urhGXWLhsY6kRJsJ62_6yxHE8lxQogQ33tjEsP3nGg==
 
   grafana:
     image: grafana/grafana
