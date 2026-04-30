@@ -27,7 +27,9 @@ cap = cv2.VideoCapture(0)
 if not cap.isOpened():
     raise RuntimeError("Camera not accessible")
 
-# Socket (RELIABLE VERSION)
+# =========================
+# SOCKET (SAFE CONNECT)
+# =========================
 client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
 while True:
@@ -41,10 +43,10 @@ while True:
 batch_manager = BatchManager()
 batch_id = batch_manager.new_batch()
 
-print("[INFO] Connected. Sending stream...")
+print("[INFO] Connected. Streaming...")
 
 # =========================
-# LOOP
+# MAIN LOOP
 # =========================
 while True:
     ret, frame = cap.read()
@@ -72,7 +74,7 @@ while True:
         })
 
     # =========================
-    # BUSINESS LOGIC
+    # YOUR LOGIC (UNCHANGED)
     # =========================
     result = process(detections, batch_id)
 
@@ -95,12 +97,10 @@ while True:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
     # =========================
-    # SEND FRAME (FAST VERSION)
+    # SEND FRAME (OPTIMIZED)
     # =========================
     try:
         _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 45])
-
-        # send raw jpeg (NO pickle)
         data = buffer.tobytes()
 
         message = struct.pack("Q", len(data)) + data
@@ -109,3 +109,5 @@ while True:
     except Exception as e:
         print("[ERROR] Send failed:", e)
         break
+
+    time.sleep(0.01)
