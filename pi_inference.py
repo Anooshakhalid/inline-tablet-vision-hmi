@@ -138,7 +138,23 @@ while True:
     except Exception as e:
         print("[ERROR] Send failed:", e)
         break
-print([d["class"] for d in detections])
+
+    print("\n--- YOLO RAW OUTPUT ---")
+
+    if len(r.boxes) == 0:
+        print("No detections")
+    else:
+        for box in r.boxes:
+            cls_id = int(box.cls[0])
+            conf = float(box.conf[0])
+            name = r.names[cls_id]
+
+            print(f"Class: {name}, Confidence: {conf:.2f}")
+
+    print("------------------------\n")
+    print("Processed detections:", detections)
+
+
 # =========================
 # CLEANUP
 # =========================
