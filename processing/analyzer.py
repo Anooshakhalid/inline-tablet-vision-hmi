@@ -3,7 +3,7 @@ from datetime import datetime
 def process(detections, batch_id):
 
     # =========================
-    # NORMALIZE + FILTER
+    # NORMALIZE+FILTER
     # =========================
     detections = [
         {**d, "class": d["class"].lower().strip()}

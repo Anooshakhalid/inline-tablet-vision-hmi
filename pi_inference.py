@@ -154,7 +154,7 @@ while True:
         break
 
 # =========================
-# CLEANUP
+# CLEANUP --
 # =========================
 cap.release()
 cv2.destroyAllWindows()
