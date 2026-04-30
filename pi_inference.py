@@ -138,7 +138,7 @@ while True:
     except Exception as e:
         print("[ERROR] Send failed:", e)
         break
-
+print([d["class"] for d in detections])
 # =========================
 # CLEANUP
 # =========================
