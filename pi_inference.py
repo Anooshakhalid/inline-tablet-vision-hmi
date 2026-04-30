@@ -93,7 +93,8 @@ while True:
             "class": name,
             "confidence": conf
         })
-
+    
+    print("RAW YOLO CLASSES:", [d["class"] for d in detections])
     result = process(detections, batch_id)
 
     try:
