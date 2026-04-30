@@ -126,16 +126,6 @@ while True:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
     # =========================
-    # ✅ DISPLAY FIRST (NO LAG)
-    # =========================
-    display_frame = cv2.resize(frame, (480, 480))  # faster rendering
-    cv2.imshow("QC", display_frame)
-
-    # press 'q' to exit
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
-
-    # =========================
     # SEND FRAME (ASYNC)
     # =========================
     try:
