@@ -14,41 +14,41 @@ print("Waiting for connection...")
 conn, addr = server_socket.accept()
 print("Connected:", addr)
 
-# reduce latency
 conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
 data = b""
 payload_size = struct.calcsize("Q")
 
-while True:
-    # get message size
-    while len(data) < payload_size:
-        packet = conn.recv(4096)
+def recv_all(size):
+    buffer = b""
+    while len(buffer) < size:
+        packet = conn.recv(size - len(buffer))
         if not packet:
-            break
-        data += packet
+            return None
+        buffer += packet
+    return buffer
 
-    if len(data) < payload_size:
+while True:
+
+    # =========================
+    # GET SIZE
+    # =========================
+    packed_size = recv_all(payload_size)
+    if not packed_size:
         break
 
-    packed_size = data[:payload_size]
-    data = data[payload_size:]
     msg_size = struct.unpack("Q", packed_size)[0]
 
-    # get frame data
-    while len(data) < msg_size:
-        packet = conn.recv(4096)
-        if not packet:
-            break
-        data += packet
+    # =========================
+    # GET FRAME
+    # =========================
+    frame_data = recv_all(msg_size)
+    if frame_data is None:
+        break
 
-    frame_data = data[:msg_size]
-    data = data[msg_size:]
-
-    # DROP backlog (important!)
-    if len(data) > msg_size:
-        data = data[-msg_size:]
-
+    # =========================
+    # DECODE
+    # =========================
     frame = cv2.imdecode(
         np.frombuffer(frame_data, dtype=np.uint8),
         cv2.IMREAD_COLOR
@@ -57,9 +57,24 @@ while True:
     if frame is None:
         continue
 
-    # faster display
-    frame = cv2.resize(frame, (480, 480))
+    # =========================
+    # FORCE LATEST FRAME (KEY FIX)
+    # =========================
+    conn.setblocking(False)
+    try:
+        while True:
+            extra = conn.recv(4096)
+            if not extra:
+                break
+            # discard extra buffered frames
+    except:
+        pass
+    conn.setblocking(True)
 
+    # =========================
+    # DISPLAY
+    # =========================
+    frame = cv2.resize(frame, (480, 480))
     cv2.imshow("YOLO LIVE STREAM", frame)
 
     if cv2.waitKey(1) & 0xFF == 27:

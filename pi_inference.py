@@ -113,17 +113,10 @@ while True:
         print(f"\nNEW BATCH: {batch_id}\n")
 
     # =========================
-    # 🔥 EXACT COLAB VISUALIZATION
+    # EXACT COLAB VISUALIZATION
     # =========================
     annotated_frame = r.plot()
 
-    # =========================
-    # DISPLAY (REAL TIME)
-    # =========================
-    cv2.imshow("QC LIVE", annotated_frame)
-
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
 
     # =========================
     # SEND TO LAPTOP (ASYNC)
@@ -137,11 +130,10 @@ while True:
         data = buffer.tobytes()
         message = struct.pack("Q", len(data)) + data
 
-        threading.Thread(
-            target=send_frame,
-            args=(client_socket, message),
-            daemon=True
-        ).start()
+        try:
+            client_socket.sendall(message)
+        except Exception as e:
+            print("[ERROR] Send failed:", e)
 
     except Exception as e:
         print("[ERROR] Send failed:", e)
