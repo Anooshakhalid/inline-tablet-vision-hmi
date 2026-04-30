@@ -94,7 +94,6 @@ while True:
             "confidence": conf
         })
     
-    print("RAW YOLO CLASSES:", [d["class"] for d in detections])
     result = process(detections, batch_id)
 
     try:
@@ -140,19 +139,6 @@ while True:
         print("[ERROR] Send failed:", e)
         break
 
-    print("\n--- YOLO RAW OUTPUT ---")
-
-    if len(r.boxes) == 0:
-        print("No detections")
-    else:
-        for box in r.boxes:
-            cls_id = int(box.cls[0])
-            conf = float(box.conf[0])
-            name = r.names[cls_id]
-
-            print(f"Class: {name}, Confidence: {conf:.2f}")
-
-    print("------------------------\n")
     print("Processed detections:", detections)
 
 
