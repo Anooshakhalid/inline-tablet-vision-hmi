@@ -1,6 +1,5 @@
 import cv2
 import socket
-import pickle
 import struct
 import time
 from ultralytics import YOLO
@@ -16,7 +15,7 @@ MODEL_PATH = "models/bestt.pt"
 FRAME_SIZE = 320
 DEVICE = "cpu"
 
-PC_IP = "192.168.100.213"   
+PC_IP = "192.168.100.213"
 PORT = 9999
 
 # =========================
@@ -28,14 +27,21 @@ cap = cv2.VideoCapture(0)
 if not cap.isOpened():
     raise RuntimeError("Camera not accessible")
 
-# Socket
+# Socket (RELIABLE VERSION)
 client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-client_socket.connect((PC_IP, PORT))
+
+while True:
+    try:
+        client_socket.connect((PC_IP, PORT))
+        break
+    except:
+        print("[INFO] Waiting for PC...")
+        time.sleep(2)
 
 batch_manager = BatchManager()
 batch_id = batch_manager.new_batch()
 
-print("[INFO] Sending stream to PC...")
+print("[INFO] Connected. Sending stream...")
 
 # =========================
 # LOOP
@@ -47,7 +53,9 @@ while True:
 
     frame = cv2.resize(frame, (FRAME_SIZE, FRAME_SIZE))
 
+    # =========================
     # YOLO
+    # =========================
     results = model(frame, imgsz=320, device=DEVICE, verbose=False)
     r = results[0]
 
@@ -63,14 +71,19 @@ while True:
             "confidence": conf
         })
 
+    # =========================
+    # BUSINESS LOGIC
+    # =========================
     result = process(detections, batch_id)
 
     try:
         save_to_influx(result)
-    except:
-        pass
+    except Exception as e:
+        print("[WARN] DB error:", e)
 
-    # Draw
+    # =========================
+    # DRAW
+    # =========================
     for d, box in zip(detections, r.boxes):
         x1, y1, x2, y2 = map(int, box.xyxy[0])
         label = d["class"]
@@ -81,12 +94,18 @@ while True:
         cv2.putText(frame, label, (x1, y1 - 5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
-    # Encode
-    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 50])
-    data = pickle.dumps(buffer)
+    # =========================
+    # SEND FRAME (FAST VERSION)
+    # =========================
+    try:
+        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 45])
 
-    # Send size + data
-    message = struct.pack("Q", len(data)) + data
-    client_socket.sendall(message)
+        # send raw jpeg (NO pickle)
+        data = buffer.tobytes()
 
-    time.sleep(0.01)
+        message = struct.pack("Q", len(data)) + data
+        client_socket.sendall(message)
+
+    except Exception as e:
+        print("[ERROR] Send failed:", e)
+        break
