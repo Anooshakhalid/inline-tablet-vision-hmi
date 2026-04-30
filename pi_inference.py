@@ -125,7 +125,7 @@ while True:
         _, buffer = cv2.imencode(
             '.jpg',
             annotated_frame,
-            [cv2.IMWRITE_JPEG_QUALITY, 50]
+            [cv2.IMWRITE_JPEG_QUALITY, 90]
         )
         data = buffer.tobytes()
         message = struct.pack("Q", len(data)) + data

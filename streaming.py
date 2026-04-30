@@ -74,7 +74,7 @@ while True:
     # =========================
     # DISPLAY
     # =========================
-    frame = cv2.resize(frame, (480, 480))
+    frame = cv2.resize(frame, (640, 640))
     cv2.imshow("YOLO LIVE STREAM", frame)
 
     if cv2.waitKey(1) & 0xFF == 27:
