@@ -22,12 +22,14 @@ def save_to_influx(result):
         point = (
             Point("tablet_detection")
             .tag("batch_id", str(result["batch_id"]))
-            .tag("status", str(result["status"]))  
-            .field("tablet_count", int(result["total"]))
+
+            .field("status", str(result["status"]))
+            .field("total", int(result["total"]))
             .field("normal", int(result["normal"]))
             .field("chip", int(result["chip"]))
             .field("cap", int(result["cap"]))
-            .time(datetime.utcnow(), WritePrecision.NS)  
+
+            .time(datetime.utcnow(), WritePrecision.NS)
         )
 
         write_api.write(
@@ -35,8 +37,6 @@ def save_to_influx(result):
             org=INFLUX_ORG,
             record=point
         )
-
-        write_api.flush() 
 
         print("Data successfully written to InfluxDB")
 
