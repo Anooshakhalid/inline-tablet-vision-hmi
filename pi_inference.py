@@ -11,7 +11,7 @@ from utils.batch_manager import BatchManager
 # =========================
 # CONFIG
 # =========================
-MODEL_PATH = "models/bestt.pt"
+MODEL_PATH = "models/best.pt"
 IMG_SIZE = 640
 DEVICE = "cpu"
 
