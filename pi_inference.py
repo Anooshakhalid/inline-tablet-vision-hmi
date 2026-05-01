@@ -15,7 +15,7 @@ MODEL_PATH = "models/best.pt"
 IMG_SIZE = 640
 DEVICE = "cpu"
 
-PC_IP = "192.168.100.213"
+PC_IP = " 192.168.137.1"
 PORT = 9999
 
 FRAME_LIMIT = 30
