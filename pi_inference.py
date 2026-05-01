@@ -26,7 +26,8 @@ frame_count = 0
 # =========================
 model = YOLO(MODEL_PATH)
 
-cap = cv2.VideoCapture("http://192.168.100.49:8080/video", cv2.CAP_FFMPEG)
+# cap = cv2.VideoCapture("http://192.168.100.49:8080/video", cv2.CAP_FFMPEG)
+cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
 if not cap.isOpened():
