@@ -2,8 +2,9 @@ import cv2
 import time
 import threading
 import numpy as np
-
+import subprocess
 from ultralytics import YOLO
+from queue import Queue
 
 from processing.analyzer import process
 from database.db import save_to_influx
@@ -19,25 +20,60 @@ WIDTH = 640
 HEIGHT = 480
 FPS = 15
 
-RTSP_URL = "rtsp://127.0.0.1:8554/live"
+CAMERA = "/dev/video0"
+RTSP_URL = "rtsp://192.168.100.121:8554/live"
 
-# =====================
-# MODEL
-# =====================
 model = YOLO(MODEL_PATH)
 
-# =====================
-# CAMERA (RTSP INPUT - FROM FFMPEG PIPELINE)
-# =====================
-cap = cv2.VideoCapture(RTSP_URL)
+camera_queue = Queue(maxsize=1)
+stream_queue = Queue(maxsize=1)
+
+cap = cv2.VideoCapture(CAMERA, cv2.CAP_V4L2)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
+cap.set(cv2.CAP_PROP_FPS, FPS)
 
 if not cap.isOpened():
-    raise RuntimeError("Cannot open RTSP stream")
+    raise RuntimeError("Camera not accessible")
 
-print("[INFO] RTSP stream opened for inference")
+print("[INFO] Camera opened")
 
 # =====================
-# QC STATE
+# FFmpeg PROCESS (FIXED)
+# =====================
+ffmpeg = subprocess.Popen(
+    [
+        "ffmpeg",
+        "-y",
+        "-loglevel", "info",
+
+        "-f", "rawvideo",
+        "-pix_fmt", "bgr24",
+        "-s", f"{WIDTH}x{HEIGHT}",
+        "-r", str(FPS),
+        "-i", "-",
+
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-tune", "zerolatency",
+        "-pix_fmt", "yuv420p",
+
+        "-g", str(FPS * 2),
+        "-keyint_min", str(FPS),
+
+        "-f", "rtsp",
+        "-rtsp_transport", "tcp",
+        RTSP_URL
+    ],
+    stdin=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    bufsize=0
+)
+
+print("[INFO] FFmpeg started")
+
+# =====================
+# STATE
 # =====================
 batch_manager = BatchManager()
 batch_id = batch_manager.new_batch()
@@ -45,20 +81,34 @@ frame_count = 0
 FRAME_LIMIT = 30
 
 # =====================
-# INFERENCE LOOP ONLY
+# CAMERA THREAD
+# =====================
+def camera_loop():
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            continue
+
+        frame = cv2.resize(frame, (WIDTH, HEIGHT))
+
+        if camera_queue.full():
+            camera_queue.get_nowait()
+
+        camera_queue.put(frame)
+
+# =====================
+# INFERENCE THREAD
 # =====================
 def inference_loop():
     global batch_id, frame_count
 
     while True:
-        ret, frame = cap.read()
-        if not ret:
-            time.sleep(0.01)
+        if camera_queue.empty():
+            time.sleep(0.001)
             continue
 
-        frame = cv2.resize(frame, (WIDTH, HEIGHT))
+        frame = camera_queue.get()
 
-        # YOLO inference
         results = model(frame, imgsz=IMG_SIZE, conf=0.25, verbose=False)[0]
 
         detections = []
@@ -72,7 +122,6 @@ def inference_loop():
                 "confidence": conf
             })
 
-        # process QC
         result = process(detections, batch_id)
 
         try:
@@ -82,22 +131,60 @@ def inference_loop():
 
         print("QC RESULT:", result)
 
-        # batch handling
         frame_count += 1
         if frame_count >= FRAME_LIMIT:
             frame_count = 0
             batch_id = batch_manager.new_batch()
             print(f"[NEW BATCH] {batch_id}")
 
-        # optional visualization
         annotated = results.plot()
-        cv2.imshow("AI Stream", annotated)
+        annotated = cv2.resize(annotated, (WIDTH, HEIGHT))
+        annotated = np.ascontiguousarray(annotated, dtype=np.uint8)
 
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        if stream_queue.full():
+            stream_queue.get_nowait()
+
+        stream_queue.put(annotated)
+
+# =====================
+# STREAM THREAD (FIXED)
+# =====================
+def stream_loop():
+    while True:
+        if stream_queue.empty():
+            time.sleep(0.001)
+            continue
+
+        frame = stream_queue.get()
+
+        frame = np.ascontiguousarray(frame, dtype=np.uint8)
+
+        try:
+            if ffmpeg.poll() is not None:
+                print("[FFMPEG ERROR] Process died")
+                break
+
+            ffmpeg.stdin.write(frame.tobytes())
+
+        except BrokenPipeError:
+            print("[FFMPEG ERROR] Pipe broken")
+            break
+
+        except Exception as e:
+            print("[FFMPEG ERROR]", e)
             break
 
 # =====================
-# START
+# START THREADS
 # =====================
-print("[INFO] Starting inference pipeline...")
-inference_loop()
+threading.Thread(target=camera_loop, daemon=True).start()
+threading.Thread(target=inference_loop, daemon=True).start()
+threading.Thread(target=stream_loop, daemon=True).start()
+
+print("[INFO] FULL PIPELINE RUNNING")
+
+# =====================
+# MAIN LOOP
+# =====================
+while True:
+    time.sleep(1)
