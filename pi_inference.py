@@ -3,8 +3,8 @@ import time
 import threading
 import numpy as np
 import subprocess
-from ultralytics import YOLO
 from queue import Queue
+from ultralytics import YOLO
 
 from processing.analyzer import process
 from database.db import save_to_influx
@@ -21,13 +21,22 @@ HEIGHT = 480
 FPS = 15
 
 CAMERA = "/dev/video0"
-RTSP_URL = "rtsp://192.168.100.121:8554/live"
+RTSP_URL = "rtsp://127.0.0.1:8554/live"
 
+# =====================
+# MODEL
+# =====================
 model = YOLO(MODEL_PATH)
 
+# =====================
+# QUEUES
+# =====================
 camera_queue = Queue(maxsize=1)
 stream_queue = Queue(maxsize=1)
 
+# =====================
+# CAMERA
+# =====================
 cap = cv2.VideoCapture(CAMERA, cv2.CAP_V4L2)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
@@ -59,7 +68,6 @@ ffmpeg = subprocess.Popen(
         "-pix_fmt", "yuv420p",
 
         "-g", str(FPS * 2),
-        "-keyint_min", str(FPS),
 
         "-f", "rtsp",
         "-rtsp_transport", "tcp",
@@ -71,6 +79,17 @@ ffmpeg = subprocess.Popen(
 )
 
 print("[INFO] FFmpeg started")
+
+# =====================
+# FFmpeg LOG THREAD (IMPORTANT)
+# =====================
+def ffmpeg_logger():
+    for line in ffmpeg.stderr:
+        print("[FFMPEG]", line.decode().strip())
+
+threading.Thread(target=ffmpeg_logger, daemon=True).start()
+
+time.sleep(2)
 
 # =====================
 # STATE
@@ -104,7 +123,6 @@ def inference_loop():
 
     while True:
         if camera_queue.empty():
-            time.sleep(0.001)
             continue
 
         frame = camera_queue.get()
@@ -152,22 +170,20 @@ def inference_loop():
 def stream_loop():
     while True:
         if stream_queue.empty():
-            time.sleep(0.001)
             continue
 
         frame = stream_queue.get()
 
-        frame = np.ascontiguousarray(frame, dtype=np.uint8)
+        if ffmpeg.poll() is not None:
+            print("[FFMPEG DEAD]")
+            break
 
         try:
-            if ffmpeg.poll() is not None:
-                print("[FFMPEG ERROR] Process died")
-                break
-
+            frame = np.ascontiguousarray(frame, dtype=np.uint8)
             ffmpeg.stdin.write(frame.tobytes())
 
         except BrokenPipeError:
-            print("[FFMPEG ERROR] Pipe broken")
+            print("[FFMPEG PIPE BROKEN]")
             break
 
         except Exception as e:
@@ -181,7 +197,7 @@ threading.Thread(target=camera_loop, daemon=True).start()
 threading.Thread(target=inference_loop, daemon=True).start()
 threading.Thread(target=stream_loop, daemon=True).start()
 
-print("[INFO] FULL PIPELINE RUNNING")
+print("[INFO] PIPELINE RUNNING")
 
 # =====================
 # MAIN LOOP
