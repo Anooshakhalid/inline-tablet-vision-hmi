@@ -21,7 +21,7 @@ HEIGHT = 480
 FPS = 15
 
 CAMERA = "/dev/video0"
-RTSP_URL = "rtsp://127.0.0.1:8554/live"
+RTSP_URL = "rtsp://192.168.100.121:8554/live"
 
 # =====================
 # MODEL
@@ -48,11 +48,11 @@ if not cap.isOpened():
 print("[INFO] Camera opened")
 
 # =====================
-# FFmpeg PIPE
+# FFmpeg PIPE (FIXED)
 # =====================
 ffmpeg = subprocess.Popen([
     "ffmpeg",
-    "-loglevel", "error",
+    "-loglevel", "info",
 
     "-f", "rawvideo",
     "-pix_fmt", "bgr24",
@@ -65,15 +65,18 @@ ffmpeg = subprocess.Popen([
     "-tune", "zerolatency",
     "-pix_fmt", "yuv420p",
 
-    "-f", "rtsp",
+    # 🔥 IMPORTANT RTSP SETTINGS
     "-rtsp_transport", "tcp",
+    "-muxdelay", "0",
+    "-muxpreload", "0",
+
+    "-f", "rtsp",
     RTSP_URL
 ], stdin=subprocess.PIPE)
 
 print("[INFO] FFmpeg started")
 
-# IMPORTANT: let RTSP server settle
-time.sleep(2)
+time.sleep(2)  # allow MediaMTX to stabilize
 
 # =====================
 # QC STATE
@@ -92,7 +95,7 @@ def camera_loop():
         if not ret:
             continue
 
-        # 🔥 CRITICAL FIX: enforce correct size ALWAYS
+        # 🔥 FORCE SIZE (VERY IMPORTANT)
         frame = cv2.resize(frame, (WIDTH, HEIGHT))
 
         if camera_queue.full():
@@ -169,9 +172,9 @@ def stream_loop():
 
         try:
             ffmpeg.stdin.write(frame.tobytes())
-            ffmpeg.stdin.flush()   # 🔥 IMPORTANT FIX
+            ffmpeg.stdin.flush()
         except BrokenPipeError:
-            print("[FFMPEG ERROR] Pipe broken (FFmpeg crashed)")
+            print("[FFMPEG ERROR] Pipe broken — FFmpeg crashed")
             break
         except Exception as e:
             print("[FFMPEG ERROR]", e)
@@ -180,7 +183,7 @@ def stream_loop():
         time.sleep(1 / FPS)
 
 # =====================
-# START THREADS
+# START
 # =====================
 threading.Thread(target=camera_loop, daemon=True).start()
 threading.Thread(target=inference_loop, daemon=True).start()
