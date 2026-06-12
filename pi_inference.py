@@ -29,7 +29,7 @@ RTSP_URL = "rtsp://127.0.0.1:8554/live"
 model = YOLO(MODEL_PATH)
 
 # =====================
-# QUEUES (FIXED DESIGN)
+# QUEUES
 # =====================
 camera_queue = Queue(maxsize=1)
 stream_queue = Queue(maxsize=1)
@@ -48,7 +48,7 @@ if not cap.isOpened():
 print("[INFO] Camera opened")
 
 # =====================
-# FFmpeg STREAM
+# FFmpeg (IMPORTANT FIX: MUST HAVE RTSP SERVER RUNNING)
 # =====================
 ffmpeg = subprocess.Popen([
     "ffmpeg",
@@ -70,10 +70,10 @@ ffmpeg = subprocess.Popen([
     RTSP_URL
 ], stdin=subprocess.PIPE)
 
-print("[INFO] RTSP streaming started")
+print("[INFO] FFmpeg started (waiting for RTSP server)")
 
 # =====================
-# YOUR QC STATE
+# QC STATE
 # =====================
 batch_manager = BatchManager()
 batch_id = batch_manager.new_batch()
@@ -90,12 +90,15 @@ def camera_loop():
             continue
 
         if camera_queue.full():
-            camera_queue.get()
+            try:
+                camera_queue.get_nowait()
+            except:
+                pass
 
         camera_queue.put(frame)
 
 # =====================
-# INFERENCE THREAD (YOUR LOGIC INTEGRATED)
+# INFERENCE THREAD
 # =====================
 def inference_loop():
     global batch_id, frame_count
@@ -107,27 +110,19 @@ def inference_loop():
 
         frame = camera_queue.get()
 
-        # =====================
-        # YOLO INFERENCE
-        # =====================
         results = model(frame, imgsz=IMG_SIZE, conf=0.25, verbose=False)[0]
-        r = results
 
         detections = []
-
-        for box in r.boxes:
+        for box in results.boxes:
             cls_id = int(box.cls[0])
             conf = float(box.conf[0])
-            name = r.names[cls_id]
+            name = results.names[cls_id]
 
             detections.append({
                 "class": name,
                 "confidence": conf
             })
 
-        # =====================
-        # YOUR BUSINESS LOGIC
-        # =====================
         result = process(detections, batch_id)
 
         try:
@@ -137,27 +132,21 @@ def inference_loop():
 
         print("QC RESULT:", result)
 
-        # =====================
-        # BATCH CONTROL
-        # =====================
         frame_count += 1
         if frame_count >= FRAME_LIMIT:
             frame_count = 0
             batch_id = batch_manager.new_batch()
             print(f"[NEW BATCH] {batch_id}")
 
-        # =====================
-        # VISUALIZATION FRAME
-        # =====================
-        annotated = r.plot()
+        annotated = results.plot()
         annotated = cv2.resize(annotated, (WIDTH, HEIGHT))
         annotated = np.ascontiguousarray(annotated)
 
-        # =====================
-        # PUSH TO STREAM QUEUE
-        # =====================
         if stream_queue.full():
-            stream_queue.get()
+            try:
+                stream_queue.get_nowait()
+            except:
+                pass
 
         stream_queue.put(annotated)
 
