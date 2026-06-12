@@ -1,134 +1,192 @@
 import cv2
-import socket
-import struct
 import time
+import threading
+import numpy as np
+import subprocess
 from ultralytics import YOLO
+from queue import Queue
 
 from processing.analyzer import process
 from database.db import save_to_influx
 from utils.batch_manager import BatchManager
 
-# =========================
+# =====================
 # CONFIG
-# =========================
+# =====================
 MODEL_PATH = "models/model.pt"
 IMG_SIZE = 640
-DEVICE = "cpu"
 
-PC_IP = "10.52.20.113"
-PORT = 9999
+WIDTH = 640
+HEIGHT = 480
+FPS = 15
 
-FRAME_LIMIT = 30
+CAMERA = "/dev/video0"
+RTSP_URL = "rtsp://127.0.0.1:8554/live"
 
-# =========================
-# INIT
-# =========================
+# =====================
+# MODEL
+# =====================
 model = YOLO(MODEL_PATH)
 
-cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
-cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+# =====================
+# QUEUES (FIXED DESIGN)
+# =====================
+camera_queue = Queue(maxsize=1)
+stream_queue = Queue(maxsize=1)
+
+# =====================
+# CAMERA
+# =====================
+cap = cv2.VideoCapture(CAMERA, cv2.CAP_V4L2)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
+cap.set(cv2.CAP_PROP_FPS, FPS)
 
 if not cap.isOpened():
     raise RuntimeError("Camera not accessible")
 
-# =========================
-# SOCKET (RECONNECT SAFE)
-# =========================
-def connect_socket():
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    while True:
-        try:
-            s.connect((PC_IP, PORT))
-            print("[INFO] Connected to PC")
-            return s
-        except:
-            print("[INFO] Waiting for PC...")
-            time.sleep(1)
+print("[INFO] Camera opened")
 
-client_socket = connect_socket()
+# =====================
+# FFmpeg STREAM
+# =====================
+ffmpeg = subprocess.Popen([
+    "ffmpeg",
+    "-loglevel", "error",
 
-# =========================
-# BATCH
-# =========================
+    "-f", "rawvideo",
+    "-pix_fmt", "bgr24",
+    "-s", f"{WIDTH}x{HEIGHT}",
+    "-r", str(FPS),
+    "-i", "-",
+
+    "-c:v", "libx264",
+    "-preset", "ultrafast",
+    "-tune", "zerolatency",
+    "-pix_fmt", "yuv420p",
+
+    "-f", "rtsp",
+    "-rtsp_transport", "tcp",
+    RTSP_URL
+], stdin=subprocess.PIPE)
+
+print("[INFO] RTSP streaming started")
+
+# =====================
+# YOUR QC STATE
+# =====================
 batch_manager = BatchManager()
 batch_id = batch_manager.new_batch()
 frame_count = 0
+FRAME_LIMIT = 30
 
-# =========================
-# MAIN LOOP
-# =========================
+# =====================
+# CAMERA THREAD
+# =====================
+def camera_loop():
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            continue
+
+        if camera_queue.full():
+            camera_queue.get()
+
+        camera_queue.put(frame)
+
+# =====================
+# INFERENCE THREAD (YOUR LOGIC INTEGRATED)
+# =====================
+def inference_loop():
+    global batch_id, frame_count
+
+    while True:
+        if camera_queue.empty():
+            time.sleep(0.001)
+            continue
+
+        frame = camera_queue.get()
+
+        # =====================
+        # YOLO INFERENCE
+        # =====================
+        results = model(frame, imgsz=IMG_SIZE, conf=0.25, verbose=False)[0]
+        r = results
+
+        detections = []
+
+        for box in r.boxes:
+            cls_id = int(box.cls[0])
+            conf = float(box.conf[0])
+            name = r.names[cls_id]
+
+            detections.append({
+                "class": name,
+                "confidence": conf
+            })
+
+        # =====================
+        # YOUR BUSINESS LOGIC
+        # =====================
+        result = process(detections, batch_id)
+
+        try:
+            save_to_influx(result)
+        except Exception as e:
+            print("[WARN] DB error:", e)
+
+        print("QC RESULT:", result)
+
+        # =====================
+        # BATCH CONTROL
+        # =====================
+        frame_count += 1
+        if frame_count >= FRAME_LIMIT:
+            frame_count = 0
+            batch_id = batch_manager.new_batch()
+            print(f"[NEW BATCH] {batch_id}")
+
+        # =====================
+        # VISUALIZATION FRAME
+        # =====================
+        annotated = r.plot()
+        annotated = cv2.resize(annotated, (WIDTH, HEIGHT))
+        annotated = np.ascontiguousarray(annotated)
+
+        # =====================
+        # PUSH TO STREAM QUEUE
+        # =====================
+        if stream_queue.full():
+            stream_queue.get()
+
+        stream_queue.put(annotated)
+
+# =====================
+# STREAM THREAD
+# =====================
+def stream_loop():
+    while True:
+        if stream_queue.empty():
+            continue
+
+        frame = stream_queue.get()
+
+        try:
+            ffmpeg.stdin.write(frame.tobytes())
+        except Exception as e:
+            print("[FFMPEG ERROR]", e)
+            break
+
+        time.sleep(1 / FPS)
+
+# =====================
+# START
+# =====================
+threading.Thread(target=camera_loop, daemon=True).start()
+threading.Thread(target=inference_loop, daemon=True).start()
+threading.Thread(target=stream_loop, daemon=True).start()
+
+print("[INFO] FULL PIPELINE RUNNING")
+
 while True:
-    ret, frame = cap.read()
-    if not ret:
-        continue
-
-    # =========================
-    # YOLO INFERENCE
-    # =========================
-    results = model(frame, imgsz=IMG_SIZE, conf=0.25, device=DEVICE, verbose=False)
-    r = results[0]
-
-    detections = []
-
-    for box in r.boxes:
-        cls_id = int(box.cls[0])
-        conf = float(box.conf[0])
-        name = r.names[cls_id]
-
-        detections.append({
-            "class": name,
-            "confidence": conf
-        })
-
-    # =========================
-    # BUSINESS LOGIC
-    # =========================
-    result = process(detections, batch_id)
-
-    try:
-        save_to_influx(result)
-    except Exception as e:
-        print("[WARN] DB error:", e)
-
-    print("QC RESULT:", result)
-
-    # =========================
-    # BATCH CONTROL
-    # =========================
-    frame_count += 1
-    if frame_count >= FRAME_LIMIT:
-        frame_count = 0
-        batch_id = batch_manager.new_batch()
-        print(f"[NEW BATCH] {batch_id}")
-
-    # =========================
-    # VISUALIZATION FRAME
-    # =========================
-    annotated_frame = r.plot()
-    annotated_frame = cv2.resize(annotated_frame, (640, 480))
-
-    # IMPORTANT FIX: contiguous memory
-    annotated_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_RGB2BGR)
-    annotated_frame = np.ascontiguousarray(annotated_frame)
-
-    # =========================
-    # SEND TO PC (STABLE PACKING)
-    # =========================
-    try:
-        _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        data = buffer.tobytes()
-
-        message = struct.pack("Q", len(data)) + data
-        client_socket.sendall(message)
-
-    except Exception as e:
-        print("[ERROR] Send failed:", e)
-        client_socket = connect_socket()
-
-    print("Processed detections:", detections)
-
-# =========================
-# CLEANUP
-# =========================
-cap.release()
-client_socket.close()
+    time.sleep(1)
