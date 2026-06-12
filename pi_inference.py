@@ -1,133 +1,159 @@
 import cv2
-import subprocess
+import time
 import threading
 import numpy as np
-import time
+import subprocess
+from ultralytics import YOLO
 
+# =====================
+# CONFIG
+# =====================
 WIDTH = 640
 HEIGHT = 480
 FPS = 15
 
 RTSP_URL = "rtsp://127.0.0.1:8554/live"
+MODEL_PATH = "models/model.pt"
 
 # =====================
-# CAMERA
+# MODEL
 # =====================
-cap = cv2.VideoCapture("/dev/video0", cv2.CAP_V4L2)
-
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
-cap.set(cv2.CAP_PROP_FPS, FPS)
-
-if not cap.isOpened():
-    raise RuntimeError("Camera not accessible")
-
-print("[INFO] Camera opened")
+model = YOLO(MODEL_PATH)
 
 # =====================
-# FFMPEG
+# SHARED STATE (IMPORTANT)
 # =====================
-ffmpeg = subprocess.Popen(
-    [
-        "ffmpeg",
-        "-loglevel", "info",
-
-        "-f", "rawvideo",
-        "-pix_fmt", "bgr24",
-        "-s", f"{WIDTH}x{HEIGHT}",
-        "-r", str(FPS),
-        "-i", "-",
-
-        "-c:v", "libx264",
-        "-preset", "ultrafast",
-        "-tune", "zerolatency",
-
-        "-pix_fmt", "yuv420p",
-
-        "-g", "15",
-        "-keyint_min", "15",
-
-        "-f", "rtsp",
-        "-rtsp_transport", "tcp",
-        RTSP_URL,
-    ],
-    stdin=subprocess.PIPE,
-    stderr=subprocess.PIPE,
-    bufsize=0,
-)
-
-print("[INFO] FFmpeg started")
+latest_frame = None
+latest_annotated = None
+lock = threading.Lock()
 
 # =====================
-# FFMPEG LOGGER
+# CAMERA THREAD
 # =====================
-def ffmpeg_logger():
+def camera_thread():
+    global latest_frame
+
+    cap = cv2.VideoCapture("/dev/video0", cv2.CAP_V4L2)
+
+    if not cap.isOpened():
+        raise RuntimeError("Camera not accessible")
+
+    print("[INFO] Camera started")
+
     while True:
-        line = ffmpeg.stderr.readline()
-        if not line:
+        ret, frame = cap.read()
+        if not ret:
+            continue
+
+        frame = cv2.resize(frame, (WIDTH, HEIGHT))
+
+        with lock:
+            latest_frame = frame
+
+# =====================
+# YOLO THREAD
+# =====================
+def inference_thread():
+    global latest_annotated
+
+    while True:
+        if latest_frame is None:
+            time.sleep(0.01)
+            continue
+
+        with lock:
+            frame = latest_frame.copy()
+
+        start = time.time()
+
+        results = model(
+            frame,
+            imgsz=320,   # IMPORTANT: faster on Pi
+            conf=0.25,
+            verbose=False
+        )[0]
+
+        annotated = results.plot()
+
+        fps = round(1 / max(time.time() - start, 0.001), 2)
+        cv2.putText(
+            annotated,
+            f"YOLO FPS: {fps}",
+            (20, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            (0, 255, 0),
+            2,
+        )
+
+        annotated = cv2.resize(annotated, (WIDTH, HEIGHT))
+        annotated = np.ascontiguousarray(annotated, dtype=np.uint8)
+
+        with lock:
+            latest_annotated = annotated
+
+# =====================
+# FFMPEG STREAMER
+# =====================
+def stream_thread():
+    global latest_annotated
+
+    ffmpeg = subprocess.Popen(
+        [
+            "ffmpeg",
+            "-loglevel", "info",
+
+            "-f", "rawvideo",
+            "-pix_fmt", "bgr24",
+            "-s", f"{WIDTH}x{HEIGHT}",
+            "-r", str(FPS),
+            "-i", "-",
+
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-tune", "zerolatency",
+            "-pix_fmt", "yuv420p",
+
+            "-g", "15",
+            "-keyint_min", "15",
+
+            "-f", "rtsp",
+            "-rtsp_transport", "tcp",
+            RTSP_URL,
+        ],
+        stdin=subprocess.PIPE,
+        bufsize=0
+    )
+
+    print("[INFO] FFmpeg started")
+
+    while True:
+        with lock:
+            frame = latest_annotated
+
+        if frame is None:
+            time.sleep(0.01)
+            continue
+
+        try:
+            ffmpeg.stdin.write(frame.tobytes())
+
+        except BrokenPipeError:
+            print("[ERROR] FFmpeg crashed")
             break
 
-        print("[FFMPEG]", line.decode(errors="ignore").strip())
-
-threading.Thread(target=ffmpeg_logger, daemon=True).start()
+        except Exception as e:
+            print("[ERROR]", e)
+            break
 
 # =====================
-# STREAM LOOP
+# START THREADS
 # =====================
-frame_count = 0
+threading.Thread(target=camera_thread, daemon=True).start()
+threading.Thread(target=inference_thread, daemon=True).start()
+threading.Thread(target=stream_thread, daemon=True).start()
+
+print("[INFO] SYSTEM RUNNING")
 
 while True:
-
-    ret, frame = cap.read()
-
-    if not ret:
-        print("[WARN] Camera read failed")
-        continue
-
-    frame = cv2.resize(frame, (WIDTH, HEIGHT))
-
-    frame_count += 1
-
-    if frame_count % 30 == 0:
-        print(f"[INFO] Frames sent: {frame_count}")
-
-    # ---------------------
-    # TEST OVERLAY
-    # ---------------------
-    annotated = frame.copy()
-
-    cv2.putText(
-        annotated,
-        f"STREAM TEST {frame_count}",
-        (20, 50),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        1,
-        (0, 255, 0),
-        2,
-    )
-
-    cv2.putText(
-        annotated,
-        time.strftime("%H:%M:%S"),
-        (20, 100),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        1,
-        (0, 255, 0),
-        2,
-    )
-
-    annotated = np.ascontiguousarray(
-        annotated,
-        dtype=np.uint8
-    )
-
-    try:
-        ffmpeg.stdin.write(annotated.tobytes())
-
-    except BrokenPipeError:
-        print("[ERROR] FFmpeg pipe broken")
-        break
-
-    except Exception as e:
-        print("[ERROR]", e)
-        break
+    time.sleep(1)
