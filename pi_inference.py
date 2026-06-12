@@ -15,7 +15,7 @@ MODEL_PATH = "models/model.pt"
 IMG_SIZE = 640
 DEVICE = "cpu"
 
-PC_IP = "192.168.100.175"
+PC_IP = "10.52.20.113"
 PORT = 9999
 
 FRAME_LIMIT = 30
