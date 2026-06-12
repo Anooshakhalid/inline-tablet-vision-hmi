@@ -8,8 +8,6 @@ PORT = 9999
 
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1)
-
 server_socket.bind((HOST, PORT))
 server_socket.listen(1)
 
@@ -17,33 +15,36 @@ print("Waiting for connection...")
 conn, addr = server_socket.accept()
 print("Connected:", addr)
 
-conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-conn.settimeout(0.001)   
-
 payload_size = struct.calcsize("Q")
 
-def recv_all(size):
+def recv_exact(sock, size):
     data = b""
     while len(data) < size:
-        try:
-            packet = conn.recv(size - len(data))
-            if not packet:
-                return None
-            data += packet
-        except:
+        packet = sock.recv(size - len(data))
+        if not packet:
             return None
+        data += packet
     return data
+
+frame_count = 0
 
 while True:
     try:
-        packed_size = recv_all(payload_size)
+        packed_size = recv_exact(conn, payload_size)
         if not packed_size:
-            continue
+            print("Disconnected or no size received")
+            break
 
         msg_size = struct.unpack("Q", packed_size)[0]
 
-        frame_data = recv_all(msg_size)
+        # safety check (VERY IMPORTANT)
+        if msg_size > 10_000_000:
+            print("Frame too large, skipping")
+            continue
+
+        frame_data = recv_exact(conn, msg_size)
         if frame_data is None:
+            print("Frame data missing")
             continue
 
         frame = cv2.imdecode(
@@ -52,16 +53,21 @@ while True:
         )
 
         if frame is None:
+            print("Decode failed")
             continue
 
-        # show FULL quality (no resize unless needed)
+        frame_count += 1
+        if frame_count % 30 == 0:
+            print("Frames received:", frame_count)
+
         cv2.imshow("YOLO LIVE STREAM", frame)
 
         if cv2.waitKey(1) & 0xFF == 27:
             break
 
-    except:
-        continue
+    except Exception as e:
+        print("Receiver error:", e)
+        break
 
 conn.close()
 cv2.destroyAllWindows()
