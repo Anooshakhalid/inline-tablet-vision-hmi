@@ -1,62 +1,83 @@
-import socket
 import cv2
-import struct
+import time
+import threading
 import numpy as np
+import subprocess
 
-HOST = "0.0.0.0"
-PORT = 9999
+from pi_inference import latest_frame, lock
 
-server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server_socket.bind((HOST, PORT))
-server_socket.listen(1)
+# =====================
+# CONFIG
+# =====================
+WIDTH = 640
+HEIGHT = 480
+FPS = 15
 
-print("Waiting for connection...")
-conn, addr = server_socket.accept()
-print("Connected:", addr)
+RTSP_URL = "rtsp://127.0.0.1:8554/live"
 
-conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+# =====================
+# FFmpeg PIPE → RTSP
+# =====================
+ffmpeg = subprocess.Popen([
+    "ffmpeg",
 
-payload_size = struct.calcsize("Q")
+    "-loglevel", "error",
 
-def recv_all(size):
-    buffer = b""
+    "-f", "image2pipe",
+    "-vcodec", "mjpeg",
+    "-i", "-",
 
-    while len(buffer) < size:
-        packet = conn.recv(size - len(buffer))
+    "-c:v", "libx264",
+    "-preset", "ultrafast",
+    "-tune", "zerolatency",
+    "-g", "1",
+    "-bf", "0",
 
-        if not packet:
-            return None
+    "-pix_fmt", "yuv420p",
+    "-f", "rtsp",
+    "-rtsp_transport", "tcp",
+    RTSP_URL
+], stdin=subprocess.PIPE)
 
-        buffer += packet
 
-    return buffer
+# =====================
+# STREAM LOOP
+# =====================
+def stream_loop():
+
+    global latest_frame
+
+    last = None
+
+    while True:
+
+        if latest_frame is None:
+            time.sleep(0.01)
+            continue
+
+        with lock:
+            frame = latest_frame.copy()
+
+        if frame is last:
+            continue
+
+        last = frame
+
+        try:
+            _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            ffmpeg.stdin.write(buffer.tobytes())
+
+        except Exception as e:
+            print("[STREAM ERROR]", e)
+            break
+
+
+# =====================
+# START
+# =====================
+threading.Thread(target=stream_loop, daemon=True).start()
+
+print("[INFO] RTSP streaming started")
 
 while True:
-
-    packed_size = recv_all(payload_size)
-
-    if not packed_size:
-        break
-
-    msg_size = struct.unpack("Q", packed_size)[0]
-
-    frame_data = recv_all(msg_size)
-
-    if frame_data is None:
-        break
-
-    frame = cv2.imdecode(
-        np.frombuffer(frame_data, dtype=np.uint8),
-        cv2.IMREAD_COLOR
-    )
-
-    if frame is None:
-        continue
-
-    cv2.imshow("YOLO LIVE STREAM", frame)
-
-    if cv2.waitKey(1) & 0xFF == 27:
-        break
-
-conn.close()
-cv2.destroyAllWindows()
+    time.sleep(1)
