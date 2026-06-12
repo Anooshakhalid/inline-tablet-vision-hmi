@@ -15,7 +15,22 @@ FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 FPS = 15
 
-CAMERA = "/dev/video1"
+import cv2
+
+def find_camera():
+    for i in range(5):
+        cap = cv2.VideoCapture(i, cv2.CAP_V4L2)
+        if cap.isOpened():
+            cap.release()
+            return i
+    return None
+
+CAMERA_INDEX = find_camera()
+if CAMERA_INDEX is None:
+    raise RuntimeError("No camera found")
+
+cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_V4L2)
+print("Using camera index:", CAMERA_INDEX)
 RTSP_URL = "rtsp://127.0.0.1:8554/live"
 
 # =====================
