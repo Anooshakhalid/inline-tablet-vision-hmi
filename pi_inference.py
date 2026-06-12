@@ -20,7 +20,6 @@ PC_IP = "192.168.100.175"
 PORT = 9999
 
 FRAME_LIMIT = 30
-prev = time.time()
 
 # =========================
 # GLOBALS (LATEST ONLY)
@@ -125,8 +124,7 @@ def inference_loop():
         latest_annotated = results.plot()
 
         print("QC RESULT:", result)
-        print("FPS:", 1 / (time.time() - prev))
-        prev = time.time()
+       
         # batch update
         frame_count += 1
         if frame_count >= FRAME_LIMIT:
