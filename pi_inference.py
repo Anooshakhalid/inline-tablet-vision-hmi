@@ -28,7 +28,7 @@ model = YOLO(MODEL_PATH)
 # =====================
 # CAMERA
 # =====================
-cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+cap = cv2.VideoCapture(1, cv2.CAP_V4L2)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
 cap.set(cv2.CAP_PROP_FPS, 30)
