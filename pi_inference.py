@@ -3,7 +3,7 @@ import socket
 import struct
 from ultralytics import YOLO
 
-PC_IP = "10.52.20.113"
+PC_IP = "192.168.100.175"
 PORT = 9999
 
 model = YOLO("models/model.pt")
