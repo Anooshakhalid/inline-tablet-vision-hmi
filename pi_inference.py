@@ -47,7 +47,7 @@ model = YOLO(MODEL_PATH)
 # =====================
 # CAMERA (ONLY ONE OWNER)
 # =====================
-cap = cv2.VideoCapture(CAMERA, cv2.CAP_V4L2)
+cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_V4L2)
 cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
