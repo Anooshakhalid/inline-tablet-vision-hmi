@@ -12,7 +12,7 @@ gst_str = (
     "appsrc ! videoconvert ! "
     "x264enc tune=zerolatency bitrate=1200 speed-preset=ultrafast ! "
     "rtph264pay config-interval=1 pt=96 ! "
-    "udpsink host=10.52.20.113 port=5000 sync=false"
+    "udpsink host=192.168.100.175 port=5000 sync=false"
 )
 
 out = cv2.VideoWriter(
