@@ -2,6 +2,7 @@ import cv2
 import socket
 import struct
 import threading
+import time
 from ultralytics import YOLO
 
 from processing.analyzer import process
@@ -19,13 +20,15 @@ PC_IP = "192.168.100.175"
 PORT = 9999
 
 FRAME_LIMIT = 30
-frame_count = 0
 
 # =========================
-# SHARED STREAM FRAME
+# GLOBALS (LATEST ONLY)
 # =========================
 latest_frame = None
-frame_lock = threading.Lock()
+latest_annotated = None
+latest_result = None
+
+lock = threading.Lock()
 
 # =========================
 # INIT
@@ -38,9 +41,6 @@ cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 if not cap.isOpened():
     raise RuntimeError("Camera not accessible")
 
-# =========================
-# SOCKET
-# =========================
 client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
@@ -54,27 +54,97 @@ while True:
 batch_manager = BatchManager()
 batch_id = batch_manager.new_batch()
 
-print("[INFO] Connected. Streaming...")
+print("[INFO] Connected. Industrial pipeline started")
 
 # =========================
-# STREAM THREAD
+# THREAD 1 - CAMERA (FAST)
 # =========================
-def stream_frames():
+def camera_loop():
     global latest_frame
 
     while True:
+        ret, frame = cap.read()
+        if not ret:
+            continue
 
-        with frame_lock:
-            if latest_frame is None:
-                continue
+        with lock:
+            latest_frame = frame
 
-            frame_to_send = latest_frame.copy()
+# =========================
+# THREAD 2 - YOLO (SLOW SAFE)
+# =========================
+def inference_loop():
+    global latest_frame, latest_annotated, latest_result, batch_id
+
+    frame_count = 0
+
+    while True:
+
+        if latest_frame is None:
+            continue
+
+        with lock:
+            frame = latest_frame.copy()
+
+        results = model(
+            frame,
+            imgsz=IMG_SIZE,
+            conf=0.25,
+            device=DEVICE,
+            verbose=False
+        )[0]
+
+        detections = []
+
+        for box in results.boxes:
+            cls_id = int(box.cls[0])
+            conf = float(box.conf[0])
+            name = results.names[cls_id]
+
+            detections.append({
+                "class": name,
+                "confidence": conf
+            })
+
+        result = process(detections, batch_id)
+
+        # async-safe DB write (no blocking stream)
+        try:
+            save_to_influx(result)
+        except Exception as e:
+            print("[WARN] DB error:", e)
+
+        latest_result = result
+        latest_annotated = results.plot()
+
+        print("QC RESULT:", result)
+
+        # batch update
+        frame_count += 1
+        if frame_count >= FRAME_LIMIT:
+            frame_count = 0
+            batch_id = batch_manager.new_batch()
+            print(f"\nNEW BATCH: {batch_id}\n")
+
+# =========================
+# THREAD 3 - STREAM (ULTRA FAST)
+# =========================
+def stream_loop():
+    global latest_annotated
+
+    while True:
+
+        if latest_annotated is None:
+            continue
+
+        with lock:
+            frame = latest_annotated.copy()
 
         try:
             _, buffer = cv2.imencode(
                 ".jpg",
-                frame_to_send,
-                [cv2.IMWRITE_JPEG_QUALITY, 90]
+                frame,
+                [cv2.IMWRITE_JPEG_QUALITY, 80]
             )
 
             data = buffer.tobytes()
@@ -84,94 +154,16 @@ def stream_frames():
 
         except Exception as e:
             print("[STREAM ERROR]", e)
-            break
-
-# Start stream thread
-threading.Thread(
-    target=stream_frames,
-    daemon=True
-).start()
 
 # =========================
-# MAIN LOOP
+# START THREADS
+# =========================
+threading.Thread(target=camera_loop, daemon=True).start()
+threading.Thread(target=inference_loop, daemon=True).start()
+threading.Thread(target=stream_loop, daemon=True).start()
+
+# =========================
+# KEEP ALIVE
 # =========================
 while True:
-
-    ret, frame = cap.read()
-
-    if not ret:
-        continue
-
-    # =========================
-    # YOLO INFERENCE
-    # =========================
-    results = model(
-        frame,
-        imgsz=IMG_SIZE,
-        conf=0.25,
-        device=DEVICE,
-        verbose=False
-    )
-
-    r = results[0]
-
-    # =========================
-    # DETECTIONS
-    # =========================
-    detections = []
-
-    for box in r.boxes:
-
-        cls_id = int(box.cls[0])
-        conf = float(box.conf[0])
-        name = r.names[cls_id]
-
-        detections.append({
-            "class": name,
-            "confidence": conf
-        })
-
-    # =========================
-    # QC LOGIC
-    # =========================
-    result = process(detections, batch_id)
-
-#    try:
-#        save_to_influx(result)
-#    except Exception as e:
-#       print("[WARN] DB error:", e)
-
-    print("QC RESULT:", result)
-
-    # =========================
-    # BATCH CONTROL
-    # =========================
-    frame_count += 1
-
-    if frame_count >= FRAME_LIMIT:
-
-        frame_count = 0
-
-        batch_id = batch_manager.new_batch()
-
-        print(f"\nNEW BATCH: {batch_id}\n")
-
-    # =========================
-    # VISUALIZATION
-    # =========================
-    annotated_frame = r.plot()
-
-    # =========================
-    # UPDATE LATEST FRAME
-    # =========================
-    with frame_lock:
-        latest_frame = annotated_frame.copy()
-
-    print("Processed detections:", detections)
-
-# =========================
-# CLEANUP
-# =========================
-cap.release()
-cv2.destroyAllWindows()
-client_socket.close()
+    time.sleep(1)
