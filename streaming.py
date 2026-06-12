@@ -1,14 +1,10 @@
-import cv2
-import time
-import threading
-import numpy as np
 import subprocess
-
-from pi_inference import latest_frame, lock
+import time
 
 # =====================
 # CONFIG
 # =====================
+CAMERA = "/dev/video1"
 WIDTH = 640
 HEIGHT = 480
 FPS = 15
@@ -16,68 +12,38 @@ FPS = 15
 RTSP_URL = "rtsp://127.0.0.1:8554/live"
 
 # =====================
-# FFmpeg PIPE → RTSP
+# FFmpeg PIPELINE (DIRECT CAMERA → RTSP)
 # =====================
-ffmpeg = subprocess.Popen([
+cmd = [
     "ffmpeg",
 
-    "-loglevel", "error",
+    "-f", "v4l2",
+    "-i", CAMERA,
 
-    "-f", "image2pipe",
-    "-vcodec", "mjpeg",
-    "-i", "-",
-
+    # encoding
     "-c:v", "libx264",
     "-preset", "ultrafast",
     "-tune", "zerolatency",
-    "-g", "1",
+    "-pix_fmt", "yuv420p",
+
+    # performance tuning
+    "-r", str(FPS),
+    "-g", "15",
     "-bf", "0",
 
-    "-pix_fmt", "yuv420p",
+    # RTSP output
     "-f", "rtsp",
     "-rtsp_transport", "tcp",
     RTSP_URL
-], stdin=subprocess.PIPE)
+]
 
+print("[INFO] Starting RTSP stream...")
+print("[INFO] URL:", RTSP_URL)
 
-# =====================
-# STREAM LOOP
-# =====================
-def stream_loop():
+process = subprocess.Popen(cmd)
 
-    global latest_frame
-
-    last = None
-
-    while True:
-
-        if latest_frame is None:
-            time.sleep(0.01)
-            continue
-
-        with lock:
-            frame = latest_frame.copy()
-
-        if frame is last:
-            continue
-
-        last = frame
-
-        try:
-            _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            ffmpeg.stdin.write(buffer.tobytes())
-
-        except Exception as e:
-            print("[STREAM ERROR]", e)
-            break
-
-
-# =====================
-# START
-# =====================
-threading.Thread(target=stream_loop, daemon=True).start()
-
-print("[INFO] RTSP streaming started")
-
-while True:
-    time.sleep(1)
+try:
+    process.wait()
+except KeyboardInterrupt:
+    print("\n[INFO] Stopping stream...")
+    process.terminate()
