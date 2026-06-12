@@ -2,6 +2,7 @@ import cv2
 import time
 import threading
 import numpy as np
+import subprocess
 from ultralytics import YOLO
 
 # =====================
@@ -9,13 +10,16 @@ from ultralytics import YOLO
 # =====================
 MODEL_PATH = "models/model.pt"
 IMG_SIZE = 640
-DEVICE = "cpu"
 
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
+FPS = 15
+
+CAMERA = "/dev/video1"
+RTSP_URL = "rtsp://127.0.0.1:8554/live"
 
 # =====================
-# GLOBAL SHARED FRAME
+# GLOBAL FRAME
 # =====================
 latest_frame = None
 lock = threading.Lock()
@@ -26,22 +30,42 @@ lock = threading.Lock()
 model = YOLO(MODEL_PATH)
 
 # =====================
-# CAMERA
+# CAMERA (ONLY ONE OWNER)
 # =====================
-cap = cv2.VideoCapture("/dev/video1", cv2.CAP_V4L2)
-
+cap = cv2.VideoCapture(CAMERA, cv2.CAP_V4L2)
 cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-cap.set(cv2.CAP_PROP_FPS, 30)
-
-print("Opened:", cap.isOpened())
-
-ret, frame = cap.read()
-print("Frame OK:", ret, None if frame is None else frame.shape)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+cap.set(cv2.CAP_PROP_FPS, FPS)
 
 if not cap.isOpened():
     raise RuntimeError("Camera not accessible")
+
+print("[INFO] Camera opened")
+
+# =====================
+# FFmpeg (TAKES RAW YOLO FRAMES)
+# =====================
+ffmpeg = subprocess.Popen([
+    "ffmpeg",
+    "-loglevel", "error",
+
+    "-f", "rawvideo",
+    "-pix_fmt", "bgr24",
+    "-s", f"{FRAME_WIDTH}x{FRAME_HEIGHT}",
+    "-r", str(FPS),
+    "-i", "-",
+
+    "-c:v", "libx264",
+    "-preset", "ultrafast",
+    "-tune", "zerolatency",
+    "-f", "rtsp",
+    "-rtsp_transport", "tcp",
+    RTSP_URL
+], stdin=subprocess.PIPE)
+
+print("[INFO] RTSP streaming started:", RTSP_URL)
+
 # =====================
 # CAMERA THREAD
 # =====================
@@ -56,15 +80,13 @@ def camera_loop():
         with lock:
             latest_frame = frame
 
-
 # =====================
-# YOLO THREAD
+# YOLO + STREAM THREAD
 # =====================
 def inference_loop():
     global latest_frame
 
     while True:
-
         if latest_frame is None:
             continue
 
@@ -73,25 +95,25 @@ def inference_loop():
 
         # YOLO inference
         results = model(frame, imgsz=IMG_SIZE, conf=0.25, verbose=False)[0]
-
         annotated = results.plot()
 
-        # FIX: ensure correct format
+        # resize for consistency
         annotated = cv2.resize(annotated, (FRAME_WIDTH, FRAME_HEIGHT))
-        annotated = np.ascontiguousarray(annotated)
 
-        with lock:
-            latest_frame = annotated
-
+        # send to FFmpeg
+        try:
+            ffmpeg.stdin.write(annotated.tobytes())
+        except Exception as e:
+            print("[FFMPEG ERROR]", e)
+            break
 
 # =====================
-# START THREADS
+# START
 # =====================
 threading.Thread(target=camera_loop, daemon=True).start()
 threading.Thread(target=inference_loop, daemon=True).start()
 
-print("[INFO] YOLO inference running (frame producer)")
+print("[INFO] YOLO + RTSP pipeline running")
 
-# keep alive
 while True:
     time.sleep(1)
