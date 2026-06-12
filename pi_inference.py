@@ -136,10 +136,10 @@ while True:
     # =========================
     result = process(detections, batch_id)
 
-    try:
-        save_to_influx(result)
-    except Exception as e:
-        print("[WARN] DB error:", e)
+#    try:
+#        save_to_influx(result)
+#    except Exception as e:
+#       print("[WARN] DB error:", e)
 
     print("QC RESULT:", result)
 
