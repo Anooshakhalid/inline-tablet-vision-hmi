@@ -1,59 +1,43 @@
 import cv2
-import socket
-import struct
+import subprocess
 from ultralytics import YOLO
-
-PC_IP = "192.168.100.175"
-PORT = 9999
 
 model = YOLO("models/model.pt")
 
 cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+# GStreamer PIPE (IMPORTANT)
+gst_str = (
+    "appsrc ! videoconvert ! "
+    "x264enc tune=zerolatency bitrate=1200 speed-preset=ultrafast ! "
+    "rtph264pay config-interval=1 pt=96 ! "
+    "udpsink host=10.52.20.113 port=5000 sync=false"
+)
 
-print("Connecting...")
+out = cv2.VideoWriter(
+    gst_str,
+    cv2.CAP_GSTREAMER,
+    0,
+    30,
+    (640, 480),
+    True
+)
 
-while True:
-    try:
-        client_socket.connect((PC_IP, PORT))
-        break
-    except:
-        pass
-
-print("Connected!")
-
-frame_id = 0
+if not cap.isOpened():
+    raise RuntimeError("Camera not opened")
 
 while True:
     ret, frame = cap.read()
     if not ret:
         continue
 
+    # YOLO inference
     results = model(frame, imgsz=640, conf=0.25, verbose=False)
     annotated = results[0].plot()
 
-    ok, buffer = cv2.imencode(
-        ".jpg",
-        annotated,
-        [cv2.IMWRITE_JPEG_QUALITY, 85]
-    )
+    # WRITE DIRECTLY TO GSTREAMER PIPELINE
+    out.write(annotated)
 
-    if not ok:
-        continue
-
-    data = buffer.tobytes()
-    message = struct.pack("Q", len(data)) + data
-
-    try:
-        client_socket.sendall(message)
-        frame_id += 1
-
-        if frame_id % 30 == 0:
-            print("Sent frames:", frame_id)
-
-    except Exception as e:
-        print("Send error:", e)
-        break
+cap.release()
+out.release()
