@@ -2,23 +2,13 @@ import cv2
 import subprocess
 import threading
 import numpy as np
-from ultralytics import YOLO
-
-# =====================
-# CONFIG
-# =====================
-MODEL_PATH = "models/model.pt"
+import time
 
 WIDTH = 640
 HEIGHT = 480
 FPS = 15
 
 RTSP_URL = "rtsp://127.0.0.1:8554/live"
-
-# =====================
-# LOAD MODEL
-# =====================
-model = YOLO(MODEL_PATH)
 
 # =====================
 # CAMERA
@@ -51,7 +41,11 @@ ffmpeg = subprocess.Popen(
         "-c:v", "libx264",
         "-preset", "ultrafast",
         "-tune", "zerolatency",
+
         "-pix_fmt", "yuv420p",
+
+        "-g", "15",
+        "-keyint_min", "15",
 
         "-f", "rtsp",
         "-rtsp_transport", "tcp",
@@ -59,6 +53,7 @@ ffmpeg = subprocess.Popen(
     ],
     stdin=subprocess.PIPE,
     stderr=subprocess.PIPE,
+    bufsize=0,
 )
 
 print("[INFO] FFmpeg started")
@@ -77,30 +72,54 @@ def ffmpeg_logger():
 threading.Thread(target=ffmpeg_logger, daemon=True).start()
 
 # =====================
-# MAIN LOOP
+# STREAM LOOP
 # =====================
+frame_count = 0
+
 while True:
 
     ret, frame = cap.read()
 
     if not ret:
+        print("[WARN] Camera read failed")
         continue
 
     frame = cv2.resize(frame, (WIDTH, HEIGHT))
 
-    # =====================
-    # YOLO
-    # =====================
-    results = model(
-        frame,
-        imgsz=640,
-        conf=0.25,
-        verbose=False
-    )[0]
+    frame_count += 1
 
-    annotated = results.plot()
-    annotated = cv2.resize(annotated, (WIDTH, HEIGHT))
-    annotated = np.ascontiguousarray(annotated, dtype=np.uint8)
+    if frame_count % 30 == 0:
+        print(f"[INFO] Frames sent: {frame_count}")
+
+    # ---------------------
+    # TEST OVERLAY
+    # ---------------------
+    annotated = frame.copy()
+
+    cv2.putText(
+        annotated,
+        f"STREAM TEST {frame_count}",
+        (20, 50),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1,
+        (0, 255, 0),
+        2,
+    )
+
+    cv2.putText(
+        annotated,
+        time.strftime("%H:%M:%S"),
+        (20, 100),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1,
+        (0, 255, 0),
+        2,
+    )
+
+    annotated = np.ascontiguousarray(
+        annotated,
+        dtype=np.uint8
+    )
 
     try:
         ffmpeg.stdin.write(annotated.tobytes())
