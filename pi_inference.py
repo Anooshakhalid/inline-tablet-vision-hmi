@@ -15,23 +15,26 @@ FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 FPS = 15
 
-import cv2
+RTSP_URL = "rtsp://127.0.0.1:8554/live"
 
+# =====================
+# CAMERA DETECTION (FIXED + SAFE)
+# =====================
 def find_camera():
     for i in range(5):
         cap = cv2.VideoCapture(i, cv2.CAP_V4L2)
         if cap.isOpened():
+            ret, _ = cap.read()
             cap.release()
-            return i
+            if ret:
+                return i
     return None
 
 CAMERA_INDEX = find_camera()
 if CAMERA_INDEX is None:
-    raise RuntimeError("No camera found")
+    raise RuntimeError("No working camera found")
 
-cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_V4L2)
-print("Using camera index:", CAMERA_INDEX)
-RTSP_URL = "rtsp://127.0.0.1:8554/live"
+print("[INFO] Using camera index:", CAMERA_INDEX)
 
 # =====================
 # GLOBAL FRAME
@@ -48,6 +51,7 @@ model = YOLO(MODEL_PATH)
 # CAMERA (ONLY ONE OWNER)
 # =====================
 cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_V4L2)
+
 cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
@@ -59,7 +63,7 @@ if not cap.isOpened():
 print("[INFO] Camera opened")
 
 # =====================
-# FFmpeg (TAKES RAW YOLO FRAMES)
+# FFmpeg (YOLO OUTPUT STREAM)
 # =====================
 ffmpeg = subprocess.Popen([
     "ffmpeg",
@@ -74,6 +78,8 @@ ffmpeg = subprocess.Popen([
     "-c:v", "libx264",
     "-preset", "ultrafast",
     "-tune", "zerolatency",
+    "-pix_fmt", "yuv420p",
+
     "-f", "rtsp",
     "-rtsp_transport", "tcp",
     RTSP_URL
@@ -95,6 +101,8 @@ def camera_loop():
         with lock:
             latest_frame = frame
 
+        time.sleep(0.001)  # small yield to reduce CPU spike
+
 # =====================
 # YOLO + STREAM THREAD
 # =====================
@@ -103,6 +111,7 @@ def inference_loop():
 
     while True:
         if latest_frame is None:
+            time.sleep(0.01)
             continue
 
         with lock:
@@ -112,10 +121,9 @@ def inference_loop():
         results = model(frame, imgsz=IMG_SIZE, conf=0.25, verbose=False)[0]
         annotated = results.plot()
 
-        # resize for consistency
+        # resize for RTSP consistency
         annotated = cv2.resize(annotated, (FRAME_WIDTH, FRAME_HEIGHT))
 
-        # send to FFmpeg
         try:
             ffmpeg.stdin.write(annotated.tobytes())
         except Exception as e:
@@ -123,12 +131,13 @@ def inference_loop():
             break
 
 # =====================
-# START
+# START THREADS
 # =====================
 threading.Thread(target=camera_loop, daemon=True).start()
 threading.Thread(target=inference_loop, daemon=True).start()
 
 print("[INFO] YOLO + RTSP pipeline running")
 
+# keep alive
 while True:
     time.sleep(1)
