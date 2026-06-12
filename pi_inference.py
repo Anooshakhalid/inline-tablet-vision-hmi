@@ -21,16 +21,16 @@ MODEL_PATH = "models/model.pt"
 model = YOLO(MODEL_PATH)
 
 # =====================
-# SHARED STATE (IMPORTANT)
+# SHARED STATE (LATEST ONLY)
 # =====================
-latest_frame = None
-latest_annotated = None
 lock = threading.Lock()
+latest_frame = None
+latest_overlay = None
 
 # =====================
-# CAMERA THREAD
+# CAMERA THREAD (FAST)
 # =====================
-def camera_thread():
+def camera_loop():
     global latest_frame
 
     cap = cv2.VideoCapture("/dev/video0", cv2.CAP_V4L2)
@@ -38,7 +38,7 @@ def camera_thread():
     if not cap.isOpened():
         raise RuntimeError("Camera not accessible")
 
-    print("[INFO] Camera started")
+    print("[CAM] started")
 
     while True:
         ret, frame = cap.read()
@@ -51,57 +51,63 @@ def camera_thread():
             latest_frame = frame
 
 # =====================
-# YOLO THREAD
+# YOLO THREAD (SLOW - SKIP SAFE)
 # =====================
-def inference_thread():
-    global latest_annotated
+def yolo_loop():
+    global latest_overlay
+
+    frame_id = 0
 
     while True:
-        if latest_frame is None:
-            time.sleep(0.01)
-            continue
 
         with lock:
+            if latest_frame is None:
+                continue
             frame = latest_frame.copy()
+
+        frame_id += 1
+
+        # SKIP FRAMES (VERY IMPORTANT)
+        if frame_id % 2 != 0:
+            continue
 
         start = time.time()
 
         results = model(
             frame,
-            imgsz=320,   # IMPORTANT: faster on Pi
+            imgsz=320,   # IMPORTANT for realtime
             conf=0.25,
             verbose=False
         )[0]
 
-        annotated = results.plot()
+        overlay = results.plot()
 
         fps = round(1 / max(time.time() - start, 0.001), 2)
+
         cv2.putText(
-            annotated,
+            overlay,
             f"YOLO FPS: {fps}",
             (20, 40),
             cv2.FONT_HERSHEY_SIMPLEX,
             1,
             (0, 255, 0),
-            2,
+            2
         )
 
-        annotated = cv2.resize(annotated, (WIDTH, HEIGHT))
-        annotated = np.ascontiguousarray(annotated, dtype=np.uint8)
+        overlay = np.ascontiguousarray(overlay, dtype=np.uint8)
 
         with lock:
-            latest_annotated = annotated
+            latest_overlay = overlay
 
 # =====================
-# FFMPEG STREAMER
+# STREAM THREAD (ZERO BLOCKING)
 # =====================
-def stream_thread():
-    global latest_annotated
+def stream_loop():
 
     ffmpeg = subprocess.Popen(
         [
             "ffmpeg",
-            "-loglevel", "info",
+            "-loglevel", "error",
 
             "-f", "rawvideo",
             "-pix_fmt", "bgr24",
@@ -117,6 +123,11 @@ def stream_thread():
             "-g", "15",
             "-keyint_min", "15",
 
+            # LOW LATENCY FLAGS
+            "-fflags", "nobuffer",
+            "-flags", "low_delay",
+            "-flush_packets", "1",
+
             "-f", "rtsp",
             "-rtsp_transport", "tcp",
             RTSP_URL,
@@ -125,11 +136,12 @@ def stream_thread():
         bufsize=0
     )
 
-    print("[INFO] FFmpeg started")
+    print("[STREAM] started")
 
     while True:
+
         with lock:
-            frame = latest_annotated
+            frame = latest_overlay if latest_overlay is not None else latest_frame
 
         if frame is None:
             time.sleep(0.01)
@@ -139,21 +151,17 @@ def stream_thread():
             ffmpeg.stdin.write(frame.tobytes())
 
         except BrokenPipeError:
-            print("[ERROR] FFmpeg crashed")
-            break
-
-        except Exception as e:
-            print("[ERROR]", e)
+            print("[FFMPEG DEAD]")
             break
 
 # =====================
-# START THREADS
+# START ALL THREADS
 # =====================
-threading.Thread(target=camera_thread, daemon=True).start()
-threading.Thread(target=inference_thread, daemon=True).start()
-threading.Thread(target=stream_thread, daemon=True).start()
+threading.Thread(target=camera_loop, daemon=True).start()
+threading.Thread(target=yolo_loop, daemon=True).start()
+threading.Thread(target=stream_loop, daemon=True).start()
 
-print("[INFO] SYSTEM RUNNING")
+print("[SYSTEM] REALTIME PIPELINE RUNNING")
 
 while True:
     time.sleep(1)
