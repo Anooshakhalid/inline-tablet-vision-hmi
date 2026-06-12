@@ -28,15 +28,20 @@ model = YOLO(MODEL_PATH)
 # =====================
 # CAMERA
 # =====================
-cap = cv2.VideoCapture(1, cv2.CAP_V4L2)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+cap = cv2.VideoCapture("/dev/video1", cv2.CAP_V4L2)
+
+cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 cap.set(cv2.CAP_PROP_FPS, 30)
+
+print("Opened:", cap.isOpened())
+
+ret, frame = cap.read()
+print("Frame OK:", ret, None if frame is None else frame.shape)
 
 if not cap.isOpened():
     raise RuntimeError("Camera not accessible")
-
-
 # =====================
 # CAMERA THREAD
 # =====================
