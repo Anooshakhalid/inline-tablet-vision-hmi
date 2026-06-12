@@ -4,6 +4,7 @@ import threading
 import numpy as np
 import subprocess
 from ultralytics import YOLO
+from queue import Queue
 
 # =====================
 # CONFIG
@@ -11,36 +12,12 @@ from ultralytics import YOLO
 MODEL_PATH = "models/model.pt"
 IMG_SIZE = 640
 
-FRAME_WIDTH = 640
-FRAME_HEIGHT = 480
+WIDTH = 640
+HEIGHT = 480
 FPS = 15
 
+CAMERA = "/dev/video0"
 RTSP_URL = "rtsp://127.0.0.1:8554/live"
-
-# =====================
-# CAMERA DETECTION (FIXED + SAFE)
-# =====================
-def find_camera():
-    for i in range(5):
-        cap = cv2.VideoCapture(i, cv2.CAP_V4L2)
-        if cap.isOpened():
-            ret, _ = cap.read()
-            cap.release()
-            if ret:
-                return i
-    return None
-
-CAMERA_INDEX = find_camera()
-if CAMERA_INDEX is None:
-    raise RuntimeError("No working camera found")
-
-print("[INFO] Using camera index:", CAMERA_INDEX)
-
-# =====================
-# GLOBAL FRAME
-# =====================
-latest_frame = None
-lock = threading.Lock()
 
 # =====================
 # MODEL
@@ -48,13 +25,12 @@ lock = threading.Lock()
 model = YOLO(MODEL_PATH)
 
 # =====================
-# CAMERA (ONLY ONE OWNER)
+# CAMERA
 # =====================
-cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_V4L2)
+cap = cv2.VideoCapture(CAMERA, cv2.CAP_V4L2)
 
-cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
 cap.set(cv2.CAP_PROP_FPS, FPS)
 
 if not cap.isOpened():
@@ -63,7 +39,12 @@ if not cap.isOpened():
 print("[INFO] Camera opened")
 
 # =====================
-# FFmpeg (YOLO OUTPUT STREAM)
+# FRAME QUEUE (IMPORTANT FIX)
+# =====================
+frame_queue = Queue(maxsize=1)
+
+# =====================
+# FFmpeg PROCESS
 # =====================
 ffmpeg = subprocess.Popen([
     "ffmpeg",
@@ -71,7 +52,7 @@ ffmpeg = subprocess.Popen([
 
     "-f", "rawvideo",
     "-pix_fmt", "bgr24",
-    "-s", f"{FRAME_WIDTH}x{FRAME_HEIGHT}",
+    "-s", f"{WIDTH}x{HEIGHT}",
     "-r", str(FPS),
     "-i", "-",
 
@@ -85,59 +66,69 @@ ffmpeg = subprocess.Popen([
     RTSP_URL
 ], stdin=subprocess.PIPE)
 
-print("[INFO] RTSP streaming started:", RTSP_URL)
+print("[INFO] RTSP streaming started")
 
 # =====================
 # CAMERA THREAD
 # =====================
 def camera_loop():
-    global latest_frame
-
     while True:
         ret, frame = cap.read()
         if not ret:
             continue
 
-        with lock:
-            latest_frame = frame
+        if frame_queue.full():
+            frame_queue.get()
 
-        time.sleep(0.001)  # small yield to reduce CPU spike
+        frame_queue.put(frame)
 
 # =====================
-# YOLO + STREAM THREAD
+# YOLO THREAD
 # =====================
 def inference_loop():
-    global latest_frame
-
     while True:
-        if latest_frame is None:
-            time.sleep(0.01)
+        if frame_queue.empty():
+            time.sleep(0.001)
             continue
 
-        with lock:
-            frame = latest_frame.copy()
+        frame = frame_queue.get()
 
-        # YOLO inference
         results = model(frame, imgsz=IMG_SIZE, conf=0.25, verbose=False)[0]
-        annotated = results.plot()
 
-        # resize for RTSP consistency
-        annotated = cv2.resize(annotated, (FRAME_WIDTH, FRAME_HEIGHT))
+        annotated = results.plot()
+        annotated = cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR)
+        annotated = cv2.resize(annotated, (WIDTH, HEIGHT))
+        annotated = np.ascontiguousarray(annotated)
+
+        # store back for streaming
+        frame_queue.put(annotated)
+
+# =====================
+# STREAM THREAD (SEPARATED)
+# =====================
+def stream_loop():
+    while True:
+        if frame_queue.empty():
+            continue
+
+        frame = frame_queue.get()
 
         try:
-            ffmpeg.stdin.write(annotated.tobytes())
+            ffmpeg.stdin.write(frame.tobytes())
         except Exception as e:
             print("[FFMPEG ERROR]", e)
             break
 
+        time.sleep(1 / FPS)
+
 # =====================
-# START THREADS
+# START
 # =====================
 threading.Thread(target=camera_loop, daemon=True).start()
 threading.Thread(target=inference_loop, daemon=True).start()
+threading.Thread(target=stream_loop, daemon=True).start()
 
-print("[INFO] YOLO + RTSP pipeline running")
+print("[INFO] Pipeline running")
 
-# keep alive
 while True:
     time.sleep(1)
