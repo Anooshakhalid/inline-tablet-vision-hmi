@@ -8,9 +8,9 @@ from ultralytics import YOLO
 # =====================
 # CONFIG
 # =====================
-WIDTH = 640
-HEIGHT = 480
-FPS = 15
+WIDTH = 320
+HEIGHT = 240
+FPS = 10
 
 RTSP_URL = "rtsp://127.0.0.1:8554/live"
 MODEL_PATH = "models/model.pt"
