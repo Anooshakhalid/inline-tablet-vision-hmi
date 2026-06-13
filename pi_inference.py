@@ -1,10 +1,20 @@
 import cv2
 import time
+import logging
 from ultralytics import YOLO
 
 from processing.analyzer import process
 from utils.batch_manager import BatchManager
 from influx_worker import InfluxWorker
+
+# =====================
+# LOGGING
+# =====================
+logging.basicConfig(
+    filename="qc_logs.txt",
+    level=logging.INFO,
+    format="%(asctime)s | %(message)s"
+)
 
 # =====================
 # CONFIG
@@ -13,7 +23,7 @@ WIDTH = 320
 HEIGHT = 240
 MODEL_PATH = "models/model.pt"
 
-TABLETS_PER_BATCH = 50
+TABLES_PER_BATCH = 50  # renamed properly (NOT tablets anymore)
 
 # =====================
 # INIT
@@ -28,6 +38,7 @@ if not cap.isOpened():
     raise RuntimeError("Camera not accessible")
 
 print("[INFO] Camera started")
+logging.info("Camera started")
 
 batch_manager = BatchManager()
 batch_id = batch_manager.new_batch()
@@ -35,13 +46,7 @@ batch_id = batch_manager.new_batch()
 influx = InfluxWorker()
 influx.start()
 
-tablet_counter = 0
-
-# helps prevent duplicate counting
-prev_tablet_present = False
-stable_frames = 0
-STABLE_THRESHOLD = 3   # important for stationary tablets
-
+count = 0
 prev_time = 0
 
 # =====================
@@ -74,41 +79,43 @@ while True:
         })
 
     # =====================
-    # PROCESS LOGIC
+    # PROCESS
     # =====================
     result = process(detections, batch_id)
 
     # =====================
-    # SAFE TABLET COUNTING (IMPORTANT PART)
+    # SAFE COUNTING (NO TABLET LOGIC)
     # =====================
-    tablet_present = result["tablet"] > 0
+    # we use "valid object presence"
+    object_present = len(detections) > 0
 
-    if tablet_present:
-        stable_frames += 1
-    else:
-        stable_frames = 0
-        prev_tablet_present = False
-
-    # count ONLY when:
-    # - tablet is present
-    # - stable for a few frames
-    # - and it was previously NOT counted
-    if stable_frames >= STABLE_THRESHOLD and not prev_tablet_present:
-        tablet_counter += 1
-        prev_tablet_present = True
+    if object_present:
+        count += 1
 
     # =====================
     # BATCH LOGIC
     # =====================
-    if tablet_counter >= TABLETS_PER_BATCH:
+    if count >= TABLES_PER_BATCH:
         batch_id = batch_manager.new_batch()
+        logging.info(f"NEW BATCH CREATED: {batch_id}")
         print(f"[INFO] NEW BATCH: {batch_id}")
-        tablet_counter = 0
+        count = 0
 
     # =====================
-    # ASYNC INFLUX
+    # INFLUX (ASYNC)
     # =====================
     influx.write(result)
+
+    # =====================
+    # LOG EACH FRAME (LIGHTWEIGHT)
+    # =====================
+    logging.info(
+        f"Batch:{batch_id} | "
+        f"Total:{result['total']} | "
+        f"Chip:{result['chip']} | "
+        f"Cap:{result['cap']} | "
+        f"Status:{result['status']}"
+    )
 
     # =====================
     # DISPLAY
@@ -118,7 +125,7 @@ while True:
     cv2.putText(annotated, f"Batch: {batch_id}", (10, 20),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
-    cv2.putText(annotated, f"Tablets: {tablet_counter}/{TABLETS_PER_BATCH}", (10, 45),
+    cv2.putText(annotated, f"Count: {count}/{TABLES_PER_BATCH}", (10, 45),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
     cv2.putText(annotated, f"Status: {result['status']}", (10, 70),
@@ -146,3 +153,4 @@ while True:
 cap.release()
 cv2.destroyAllWindows()
 influx.stop()
+logging.info("System stopped")

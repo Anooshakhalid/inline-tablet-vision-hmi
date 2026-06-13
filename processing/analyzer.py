@@ -21,30 +21,23 @@ def process(detections, batch_id):
             "time": current_time,
             "batch_id": batch_id,
             "total": 0,
-            "tablet": 0,
             "normal": 0,
             "chip": 0,
             "cap": 0,
-            "status": "NO_DATA",          # cleaner than NO_DETECTION
-            "detection": "NO_OBJECT"
+            "status": "NO_DATA"
         }
 
     # =========================
     # COUNT CLASSES
     # =========================
-    tablet = sum(1 for d in detections if d["class"] == "tablet")
     normal = sum(1 for d in detections if d["class"] == "normal")
     chip = sum(1 for d in detections if d["class"] == "chip")
     cap = sum(1 for d in detections if d["class"] == "cap")
 
-    # =========================
-    # DETECTION STATUS
-    # =========================
-    has_tablet = tablet > 0
-    detection_status = "TABLET_PRESENT" if has_tablet else "NO_TABLET"
+    total = len(detections)
 
     # =========================
-    # QC LOGIC (STRICT QUALITY ONLY)
+    # QC LOGIC
     # =========================
     has_defect = (chip + cap) > 0
 
@@ -59,11 +52,9 @@ def process(detections, batch_id):
     return {
         "time": current_time,
         "batch_id": batch_id,
-        "total": len(detections),
-        "tablet": tablet,
+        "total": total,
         "normal": normal,
         "chip": chip,
         "cap": cap,
-        "status": status,                 # PASS / FAIL only
-        "detection": detection_status     # separate tracking
+        "status": status
     }
