@@ -55,7 +55,6 @@ def send_log(msg):
 # =====================
 # CAMERA
 # =====================
-# cap = cv2.VideoCapture("http://192.168.1.9:8080/video")
 cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
@@ -74,7 +73,7 @@ influx.start()
 # =====================
 frame_count = 0
 
-tablet_results = {}   # oid -> result (RUN ONLY ONCE)
+tablet_results = {}
 seen_ids = set()
 
 batch_id = 1
@@ -101,7 +100,7 @@ while True:
     frame = cv2.resize(frame, (WIDTH, HEIGHT))
 
     # =====================
-    # STAGE 1 - DETECT TABLETS
+    # STAGE 1 - TABLET DETECTION
     # =====================
     results1 = stage1.track(
         frame,
@@ -115,33 +114,57 @@ while True:
 
     if results1.boxes is not None:
 
-        for box, cls in zip(results1.boxes.xyxy, results1.boxes.cls):
+        for box, cls, conf in zip(
+            results1.boxes.xyxy,
+            results1.boxes.cls,
+            results1.boxes.conf
+        ):
 
             cls_id = int(cls)
 
-            # only tablet or normal
             if cls_id not in [0, 3]:
                 continue
 
-            if results1.boxes.id is None:
-                continue
-
-            oid = int(results1.boxes.id[0])
-
             x1, y1, x2, y2 = map(int, box.tolist())
-            tablets.append((oid, x1, y1, x2, y2))
+            confidence = float(conf)
+
+            # =====================
+            # STAGE 1 VISUAL (YELLOW BOX)
+            # =====================
+            label = f"{stage1.names[cls_id]} {confidence*100:.1f}%"
+
+            cv2.rectangle(
+                frame,
+                (x1, y1),
+                (x2, y2),
+                (255, 255, 0),
+                2
+            )
+
+            cv2.putText(
+                frame,
+                label,
+                (x1, y1 - 8),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 0),
+                1
+            )
+
+            if results1.boxes.id is not None:
+                oid = int(results1.boxes.id[0])
+                tablets.append((oid, x1, y1, x2, y2))
 
     detections = []
 
     # =====================
-    # STAGE 2 - PROCESS EACH TABLET ONCE
+    # STAGE 2 - DEFECT DETECTION
     # =====================
     for (oid, x1, y1, x2, y2) in tablets:
 
         if oid in tablet_results:
             continue
 
-        # crop with margin
         m = 0.05
         w, h = x2 - x1, y2 - y1
 
@@ -169,25 +192,75 @@ while True:
                 if r2.boxes is None:
                     continue
 
-                for cls_tensor in r2.boxes.cls:
+                if r2.masks is None:
+                    continue
+
+                for mask_tensor, cls_tensor, conf_tensor in zip(
+                    r2.masks.data,
+                    r2.boxes.cls,
+                    r2.boxes.conf
+                ):
 
                     cls_id = int(cls_tensor)
+                    conf_pct = float(conf_tensor) * 100
+
+                    defect_name = stage2.names[cls_id]
 
                     if cls_id == 0:
                         tablet_status = "FAIL"
                         defect_type = "chip"
+                        color = (0, 255, 0)
 
                     elif cls_id == 1:
                         tablet_status = "FAIL"
                         defect_type = "cap"
+                        color = (0, 0, 255)
 
-        # store result once
+                    # =====================
+                    # MASK OVERLAY (STREAMLIT STYLE)
+                    # =====================
+                    mask = mask_tensor.cpu().numpy()
+
+                    mask = cv2.resize(mask, (crop.shape[1], crop.shape[0]))
+
+                    full_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+                    full_mask[y1e:y2e, x1e:x2e] = (mask > 0.5).astype(np.uint8)
+
+                    overlay = frame.copy()
+                    overlay[full_mask > 0] = color
+
+                    frame = cv2.addWeighted(
+                        overlay,
+                        0.4,
+                        frame,
+                        0.6,
+                        0
+                    )
+
+                    # =====================
+                    # STAGE 2 LABEL (CONFIDENCE INCLUDED)
+                    # =====================
+                    ys, xs = np.where(full_mask > 0)
+
+                    if len(xs) > 0:
+                        cx = int(xs.mean())
+                        cy = int(ys.mean())
+
+                        cv2.putText(
+                            frame,
+                            f"{defect_name} {conf_pct:.1f}%",
+                            (cx, cy),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.5,
+                            color,
+                            1
+                        )
+
         tablet_results[oid] = {
             "status": tablet_status,
             "defect": defect_type
         }
 
-        # counting
         if oid not in seen_ids:
 
             seen_ids.add(oid)
@@ -203,7 +276,7 @@ while True:
             })
 
     # =====================
-    # ANALYTICS
+    # ANALYTICS + INFLUX
     # =====================
     result = process(detections)
     influx.write(result)
@@ -225,33 +298,34 @@ while True:
         print(f"[BATCH] STARTED {batch_id}")
 
     # =====================
-    # FPS
+    # FPS + STATUS UI
     # =====================
     curr_time = time.time()
     fps = 1 / max(curr_time - prev_time, 1e-6)
     prev_time = curr_time
 
-    # =====================
-    # CLEAN OVERLAY (NO IDS)
-    # =====================
     status = "PASS" if fail_count == 0 else "FAIL"
     color = (0, 255, 0) if status == "PASS" else (0, 0, 255)
 
-    cv2.putText(frame,
-                f"B:{batch_id} P:{pass_count} F:{fail_count}",
-                (10, 20),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (255, 255, 255),
-                1)
+    cv2.putText(
+        frame,
+        f"B:{batch_id} P:{pass_count} F:{fail_count}",
+        (10, 20),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (255, 255, 255),
+        1
+    )
 
-    cv2.putText(frame,
-                f"{status} | {int(fps)} FPS",
-                (10, 40),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                color,
-                1)
+    cv2.putText(
+        frame,
+        f"{status} | {int(fps)} FPS",
+        (10, 40),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        color,
+        1
+    )
 
     cv2.imshow("QC PIPELINE", frame)
 
