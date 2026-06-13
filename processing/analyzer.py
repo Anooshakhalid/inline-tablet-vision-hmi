@@ -1,7 +1,6 @@
 from datetime import datetime
 
-def process(detections, batch_id):
-
+def process(detections):
     current_time = datetime.now().isoformat()
 
     # =========================
@@ -10,7 +9,7 @@ def process(detections, batch_id):
     detections = [
         {**d, "class": d["class"].lower().strip()}
         for d in detections
-        if d["confidence"] > 0.25
+        if d.get("confidence", 0) > 0.25
     ]
 
     # =========================
@@ -19,7 +18,6 @@ def process(detections, batch_id):
     if not detections:
         return {
             "time": current_time,
-            "batch_id": batch_id,
             "total": 0,
             "normal": 0,
             "chip": 0,
@@ -39,19 +37,13 @@ def process(detections, batch_id):
     # =========================
     # QC LOGIC
     # =========================
-    has_defect = (chip + cap) > 0
-
-    if has_defect:
-        status = "FAIL"
-    else:
-        status = "PASS"
+    status = "FAIL" if (chip + cap) > 0 else "PASS"
 
     # =========================
     # FINAL OUTPUT
     # =========================
     return {
         "time": current_time,
-        "batch_id": batch_id,
         "total": total,
         "normal": normal,
         "chip": chip,
