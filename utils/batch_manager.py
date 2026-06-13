@@ -1,8 +1,13 @@
+import os
+
 class BatchManager:
     def __init__(self):
+        self.file = os.path.join(os.path.dirname(__file__), "batch.txt")
+
         try:
-            with open("batch.txt", "r") as f:
-                self.counter = int(f.read())
+            with open(self.file, "r") as f:
+                content = f.read().strip()
+                self.counter = int(content) if content else 1
         except:
             self.counter = 1
 
@@ -10,7 +15,7 @@ class BatchManager:
         batch_id = f"B{self.counter:03d}"
         self.counter += 1
 
-        with open("batch.txt", "w") as f:
+        with open(self.file, "w") as f:
             f.write(str(self.counter))
 
         return batch_id
