@@ -21,13 +21,16 @@ def save_to_influx(result):
     try:
         point = (
             Point("tablet_detection")
-            .tag("batch_id", str(result["batch_id"]))
+            .tag("batch_id", str(result.get("batch_id", "0")))
 
-            .field("status", str(result["status"]))
-            .field("total", int(result["total"]))
-            .field("normal", int(result["normal"]))
-            .field("chip", int(result["chip"]))
-            .field("cap", int(result["cap"]))
+            .field("status", str(result.get("status", "UNKNOWN")))
+            .field("total", int(result.get("total", 0)))
+
+            .field("pass", int(result.get("pass", 0)))
+            .field("fail", int(result.get("fail", 0)))
+
+            .field("chip", int(result.get("chip", 0)))
+            .field("cap", int(result.get("cap", 0)))
 
             .time(datetime.utcnow(), WritePrecision.NS)
         )

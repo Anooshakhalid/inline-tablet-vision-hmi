@@ -1,19 +1,24 @@
 import threading
-from queue import Queue
+from queue import Queue, Empty
 from database.db import save_to_influx
 
 class InfluxWorker:
     def __init__(self):
-        self.queue = Queue()
+        self.queue = Queue(maxsize=200)
         self.running = True
+        self.thread = None
 
     def start(self):
-        thread = threading.Thread(target=self._worker, daemon=True)
-        thread.start()
+        self.thread = threading.Thread(target=self._worker, daemon=True)
+        self.thread.start()
 
     def _worker(self):
         while self.running:
-            result = self.queue.get()
+
+            try:
+                result = self.queue.get(timeout=1)
+            except Empty:
+                continue
 
             if result is None:
                 break
@@ -26,8 +31,16 @@ class InfluxWorker:
             self.queue.task_done()
 
     def write(self, data):
-        self.queue.put(data)
+
+        try:
+            self.queue.put(data, block=False)
+        except:
+            # drop oldest behavior can be added here if needed
+            print("[Influx WARN] queue full, dropping data")
 
     def stop(self):
-        self.queue.put(None)
         self.running = False
+        self.queue.put(None)
+
+        if self.thread:
+            self.thread.join(timeout=2)

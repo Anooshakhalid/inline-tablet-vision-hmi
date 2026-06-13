@@ -1,14 +1,6 @@
 def process(detections):
     """
-    Two-stage QC analyzer
-
-    detections example:
-
-    [
-        {"status": "PASS", "defect": None},
-        {"status": "FAIL", "defect": "chip"},
-        {"status": "FAIL", "defect": "cap"}
-    ]
+    Tablet-level QC analyzer (production-safe)
     """
 
     total = len(detections)
@@ -30,18 +22,17 @@ def process(detections):
 
     for d in detections:
 
-        if d["status"] == "PASS":
+        defect = d.get("defect")
+
+        if defect is None:
             pass_count += 1
         else:
             fail_count += 1
 
-        if d.get("defect") == "chip":
+        if defect == "chip":
             chip_count += 1
-
-        if d.get("defect") == "cap":
+        elif defect == "cap":
             cap_count += 1
-
-    status = "FAIL" if fail_count > 0 else "PASS"
 
     return {
         "total": total,
@@ -49,5 +40,5 @@ def process(detections):
         "fail": fail_count,
         "chip": chip_count,
         "cap": cap_count,
-        "status": status
+        "status": "FAIL" if fail_count > 0 else "PASS"
     }
