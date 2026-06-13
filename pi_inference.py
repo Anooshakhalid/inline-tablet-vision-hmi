@@ -30,6 +30,9 @@ stage2 = YOLO("models/new_m_2.pt")
 # =====================
 # LOG SOCKET
 # =====================
+import socket
+import json
+
 PC_IP = "192.168.100.175"
 PORT = 9999
 
@@ -51,16 +54,31 @@ def send_log(msg):
         except:
             pass
 
-
 # =====================
 # CAMERA
 # =====================
-cap = cv2.VideoCapture(0)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
+cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
 
-if not cap.isOpened():
-    raise RuntimeError("Camera not accessible")
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+cap.set(cv2.CAP_PROP_FPS, 30)
+cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        continue
+
+    display_frame = frame.copy()
+    infer_frame = cv2.resize(frame, (640, 480))
+
+    # run YOLO on infer_frame
+    # draw on display_frame
+
+    display_frame = cv2.convertScaleAbs(display_frame, alpha=1.2, beta=10)
+
+    cv2.imshow("QC PIPELINE", display_frame)
 
 # =====================
 # INFLUX
@@ -294,7 +312,16 @@ while True:
         seen_ids.clear()
         tablet_results.clear()
 
-        send_log(f"NEW_BATCH:{batch_id}")
+        log_data = {
+            "event": "BATCH_UPDATE",
+            "batch": batch_id,
+            "status": status,
+            "pass": pass_count,
+            "fail": fail_count,
+            "fps": round(fps, 2)
+        }
+
+        send_log(json.dumps(log_data))
         print(f"[BATCH] STARTED {batch_id}")
 
     # =====================
