@@ -203,64 +203,42 @@ while True:
                 verbose=False
             )
 
+            results2 = stage2(crop, imgsz=IMGSZ2, conf=CONF2, verbose=False)
+
             for r2 in results2:
 
-                if r2.boxes is None or r2.masks is None:
+                if r2.boxes is None:
                     continue
 
-                for mask_tensor, cls_tensor, conf_tensor in zip(
-                    r2.masks.data,
-                    r2.boxes.cls,
-                    r2.boxes.conf
-                ):
+                for box, cls, conf in zip(r2.boxes.xyxy, r2.boxes.cls, r2.boxes.conf):
 
-                    cls_id = int(cls_tensor)
-                    conf_pct = float(conf_tensor) * 100
+                    cls_id = int(cls)
+                    conf_pct = float(conf) * 100
 
                     defect_name = stage2.names[cls_id]
 
-                    if cls_id == 0:
+                    # IMPORTANT: PASS / FAIL LOGIC
+                    if defect_name == "chip":
                         tablet_status = "FAIL"
-                        defect_type = "chip"
                         color = (0, 255, 0)
 
-                    elif cls_id == 1:
+                    elif defect_name == "cap":
                         tablet_status = "FAIL"
-                        defect_type = "cap"
                         color = (0, 0, 255)
 
-                    mask = mask_tensor.cpu().numpy()
-                    mask = cv2.resize(mask, (crop.shape[1], crop.shape[0]))
+                    x1, y1, x2, y2 = map(int, box.tolist())
 
-                    full_mask = np.zeros(display_frame.shape[:2], dtype=np.uint8)
-                    full_mask[y1e:y2e, x1e:x2e] = (mask > 0.5).astype(np.uint8)
+                    cv2.rectangle(crop, (x1, y1), (x2, y2), color, 2)
 
-                    overlay = display_frame.copy()
-                    overlay[full_mask > 0] = color
-
-                    display_frame = cv2.addWeighted(
-                        overlay,
-                        0.4,
-                        display_frame,
-                        0.6,
-                        0
+                    cv2.putText(
+                        crop,
+                        f"{defect_name} {conf_pct:.1f}%",
+                        (x1, y1 - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5,
+                        color,
+                        1
                     )
-
-                    ys, xs = np.where(full_mask > 0)
-
-                    if len(xs) > 0:
-                        cx = int(xs.mean())
-                        cy = int(ys.mean())
-
-                        cv2.putText(
-                            display_frame,
-                            f"{defect_name} {conf_pct:.1f}%",
-                            (cx, cy),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.5,
-                            color,
-                            1
-                        )
 
         tablet_results[oid] = {
             "status": tablet_status,
