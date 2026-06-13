@@ -55,6 +55,7 @@ def send_log(msg):
 # =====================
 # CAMERA
 # =====================
+# cap = cv2.VideoCapture("http://192.168.1.9:8080/video")
 cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
