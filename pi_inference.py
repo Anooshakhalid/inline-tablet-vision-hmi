@@ -2,6 +2,7 @@ import cv2
 import time
 import numpy as np
 import socket
+import json
 from ultralytics import YOLO
 
 from processing.analyzer import process
@@ -28,16 +29,13 @@ stage1 = YOLO("models/new_m_1.pt")
 stage2 = YOLO("models/new_m_2.pt")
 
 # =====================
-# LOG SOCKET
+# SOCKET LOGGING (SAFE)
 # =====================
-import socket
-import json
-
 PC_IP = "192.168.100.175"
 PORT = 9999
 
 log_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-log_socket.settimeout(0.5)
+log_socket.settimeout(0.2)
 
 try:
     log_socket.connect((PC_IP, PORT))
@@ -65,20 +63,8 @@ cap.set(cv2.CAP_PROP_FPS, 30)
 cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        continue
-
-    display_frame = frame.copy()
-    infer_frame = cv2.resize(frame, (640, 480))
-
-    # run YOLO on infer_frame
-    # draw on display_frame
-
-    display_frame = cv2.convertScaleAbs(display_frame, alpha=1.2, beta=10)
-
-    cv2.imshow("QC PIPELINE", display_frame)
+if not cap.isOpened():
+    raise RuntimeError("Camera not accessible")
 
 # =====================
 # INFLUX
@@ -90,7 +76,6 @@ influx.start()
 # STATE
 # =====================
 frame_count = 0
-
 tablet_results = {}
 seen_ids = set()
 
@@ -103,7 +88,7 @@ fail_count = 0
 prev_time = time.time()
 
 # =====================
-# MAIN LOOP
+# MAIN LOOP (ONLY ONE)
 # =====================
 while True:
 
@@ -115,13 +100,14 @@ while True:
     if frame_count % FRAME_SKIP != 0:
         continue
 
-    frame = cv2.resize(frame, (WIDTH, HEIGHT))
+    display_frame = frame.copy()
+    infer_frame = cv2.resize(frame, (640, 480))
 
     # =====================
     # STAGE 1 - TABLET DETECTION
     # =====================
     results1 = stage1.track(
-        frame,
+        infer_frame,
         persist=True,
         imgsz=IMGSZ1,
         conf=CONF1,
@@ -146,13 +132,22 @@ while True:
             x1, y1, x2, y2 = map(int, box.tolist())
             confidence = float(conf)
 
+            # scale back to display frame
+            scale_x = display_frame.shape[1] / infer_frame.shape[1]
+            scale_y = display_frame.shape[0] / infer_frame.shape[0]
+
+            x1 = int(x1 * scale_x)
+            y1 = int(y1 * scale_y)
+            x2 = int(x2 * scale_x)
+            y2 = int(y2 * scale_y)
+
             # =====================
-            # STAGE 1 VISUAL (YELLOW BOX)
+            # STAGE 1 VISUAL
             # =====================
             label = f"{stage1.names[cls_id]} {confidence*100:.1f}%"
 
             cv2.rectangle(
-                frame,
+                display_frame,
                 (x1, y1),
                 (x2, y2),
                 (255, 255, 0),
@@ -160,7 +155,7 @@ while True:
             )
 
             cv2.putText(
-                frame,
+                display_frame,
                 label,
                 (x1, y1 - 8),
                 cv2.FONT_HERSHEY_SIMPLEX,
@@ -188,10 +183,10 @@ while True:
 
         x1e = max(0, int(x1 - m * w))
         y1e = max(0, int(y1 - m * h))
-        x2e = min(frame.shape[1], int(x2 + m * w))
-        y2e = min(frame.shape[0], int(y2 + m * h))
+        x2e = min(display_frame.shape[1], int(x2 + m * w))
+        y2e = min(display_frame.shape[0], int(y2 + m * h))
 
-        crop = frame[y1e:y2e, x1e:x2e]
+        crop = display_frame[y1e:y2e, x1e:x2e]
 
         tablet_status = "PASS"
         defect_type = None
@@ -207,10 +202,7 @@ while True:
 
             for r2 in results2:
 
-                if r2.boxes is None:
-                    continue
-
-                if r2.masks is None:
+                if r2.boxes is None or r2.masks is None:
                     continue
 
                 for mask_tensor, cls_tensor, conf_tensor in zip(
@@ -234,30 +226,23 @@ while True:
                         defect_type = "cap"
                         color = (0, 0, 255)
 
-                    # =====================
-                    # MASK OVERLAY (STREAMLIT STYLE)
-                    # =====================
                     mask = mask_tensor.cpu().numpy()
-
                     mask = cv2.resize(mask, (crop.shape[1], crop.shape[0]))
 
-                    full_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+                    full_mask = np.zeros(display_frame.shape[:2], dtype=np.uint8)
                     full_mask[y1e:y2e, x1e:x2e] = (mask > 0.5).astype(np.uint8)
 
-                    overlay = frame.copy()
+                    overlay = display_frame.copy()
                     overlay[full_mask > 0] = color
 
-                    frame = cv2.addWeighted(
+                    display_frame = cv2.addWeighted(
                         overlay,
                         0.4,
-                        frame,
+                        display_frame,
                         0.6,
                         0
                     )
 
-                    # =====================
-                    # STAGE 2 LABEL (CONFIDENCE INCLUDED)
-                    # =====================
                     ys, xs = np.where(full_mask > 0)
 
                     if len(xs) > 0:
@@ -265,7 +250,7 @@ while True:
                         cy = int(ys.mean())
 
                         cv2.putText(
-                            frame,
+                            display_frame,
                             f"{defect_name} {conf_pct:.1f}%",
                             (cx, cy),
                             cv2.FONT_HERSHEY_SIMPLEX,
@@ -294,7 +279,7 @@ while True:
             })
 
     # =====================
-    # ANALYTICS + INFLUX
+    # ANALYTICS
     # =====================
     result = process(detections)
     influx.write(result)
@@ -304,13 +289,13 @@ while True:
     # =====================
     total_count = pass_count + fail_count
 
-    if total_count >= batch_limit:
+    curr_time = time.time()
+    fps = 1 / max(curr_time - prev_time, 1e-6)
+    prev_time = curr_time
 
-        batch_id += 1
-        pass_count = 0
-        fail_count = 0
-        seen_ids.clear()
-        tablet_results.clear()
+    status = "PASS" if fail_count == 0 else "FAIL"
+
+    if total_count >= batch_limit:
 
         log_data = {
             "event": "BATCH_UPDATE",
@@ -322,20 +307,18 @@ while True:
         }
 
         send_log(json.dumps(log_data))
-        print(f"[BATCH] STARTED {batch_id}")
+
+        batch_id += 1
+        pass_count = 0
+        fail_count = 0
+        seen_ids.clear()
+        tablet_results.clear()
 
     # =====================
-    # FPS + STATUS UI
+    # UI TEXT
     # =====================
-    curr_time = time.time()
-    fps = 1 / max(curr_time - prev_time, 1e-6)
-    prev_time = curr_time
-
-    status = "PASS" if fail_count == 0 else "FAIL"
-    color = (0, 255, 0) if status == "PASS" else (0, 0, 255)
-
     cv2.putText(
-        frame,
+        display_frame,
         f"B:{batch_id} P:{pass_count} F:{fail_count}",
         (10, 20),
         cv2.FONT_HERSHEY_SIMPLEX,
@@ -345,16 +328,16 @@ while True:
     )
 
     cv2.putText(
-        frame,
+        display_frame,
         f"{status} | {int(fps)} FPS",
         (10, 40),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.5,
-        color,
+        (0, 255, 0) if status == "PASS" else (0, 0, 255),
         1
     )
 
-    cv2.imshow("QC PIPELINE", frame)
+    cv2.imshow("QC PIPELINE", display_frame)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
