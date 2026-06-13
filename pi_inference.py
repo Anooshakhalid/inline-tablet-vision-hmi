@@ -55,7 +55,10 @@ def send_log(msg):
 # =====================
 # CAMERA
 # =====================
-cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+IP_URL = "http://192.168.100.6:8080/video"
+
+cap = cv2.VideoCapture(IP_URL, cv2.CAP_FFMPEG)
+# cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
 
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
