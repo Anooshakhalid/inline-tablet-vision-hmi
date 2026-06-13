@@ -8,13 +8,17 @@ from utils.batch_manager import BatchManager
 from influx_worker import InfluxWorker
 
 # =====================
-# LOGGING
+# LOGGING (FORCE FIX)
 # =====================
-logging.basicConfig(
-    filename="qc_logs.txt",
-    level=logging.INFO,
-    format="%(asctime)s | %(message)s"
-)
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+file_handler = logging.FileHandler("qc_logs.txt", mode="a")
+formatter = logging.Formatter("%(asctime)s | %(message)s")
+file_handler.setFormatter(formatter)
+
+logger.handlers = []
+logger.addHandler(file_handler)
 
 # =====================
 # CONFIG
@@ -23,8 +27,10 @@ WIDTH = 320
 HEIGHT = 240
 MODEL_PATH = "models/model.pt"
 
-LINE_X = WIDTH // 2          # conveyor counting line
-DIST_THRESHOLD = 40          # tracking tolerance
+LINE_X = WIDTH // 2
+
+# cooldown zone (VERY IMPORTANT in real systems)
+COOLDOWN_DISTANCE = 25
 
 # =====================
 # INIT
@@ -39,7 +45,7 @@ if not cap.isOpened():
     raise RuntimeError("Camera not accessible")
 
 print("[INFO] Camera started")
-logging.info("Camera started")
+logger.info("Camera started")
 
 batch_manager = BatchManager()
 batch_id = batch_manager.new_batch()
@@ -50,17 +56,19 @@ influx.start()
 # =====================
 # STATE
 # =====================
-tracked_objects = {}   # id -> (cx, cy)
+tracked = {}         # object_id -> (cx, cy)
+last_side = {}       # object_id -> LEFT / RIGHT
+counted = set()      # already counted objects
 next_id = 0
-count = 0
 
+count = 0
 prev_time = 0
 
 
 # =====================
-# SIMPLE TRACKING MATCH
+# SIMPLE TRACKING
 # =====================
-def match_objects(prev, curr):
+def match(prev, curr):
     global next_id
 
     matched = []
@@ -69,7 +77,7 @@ def match_objects(prev, curr):
         assigned = False
 
         for oid, (px, py) in prev.items():
-            if abs(cx - px) < DIST_THRESHOLD and abs(cy - py) < DIST_THRESHOLD:
+            if abs(cx - px) < 40 and abs(cy - py) < 40:
                 matched.append((oid, cx, cy))
                 assigned = True
                 break
@@ -91,16 +99,14 @@ while True:
 
     frame = cv2.resize(frame, (WIDTH, HEIGHT))
 
-    # =====================
-    # YOLO
-    # =====================
     results = model(frame, imgsz=256, conf=0.25, verbose=False)[0]
 
-    # =====================
-    # GET CENTERS
-    # =====================
+    detections = []
     centers = []
 
+    # =====================
+    # EXTRACT DETECTIONS
+    # =====================
     for box in results.boxes:
         x1, y1, x2, y2 = box.xyxy[0]
 
@@ -109,12 +115,6 @@ while True:
 
         centers.append((cx, cy))
 
-    # =====================
-    # PROCESS LOGIC
-    # =====================
-    detections = []
-
-    for box in results.boxes:
         cls_id = int(box.cls[0])
         conf = float(box.conf[0])
 
@@ -128,56 +128,66 @@ while True:
     # =====================
     # TRACK OBJECTS
     # =====================
-    matched = match_objects(tracked_objects, centers)
+    matched = match(tracked, centers)
 
-    new_state = {}
+    new_tracked = {}
 
     for oid, cx, cy in matched:
 
-        prev_x = tracked_objects.get(oid, (cx, cy))[0]
+        prev_x = tracked.get(oid, (cx, cy))[0]
+
+        # LEFT / RIGHT SIDE
+        current_side = "LEFT" if cx < LINE_X else "RIGHT"
+
+        # store side memory
+        prev_side = last_side.get(oid, current_side)
 
         # =====================
-        # CONVEYOR CROSSING RULE
+        # REAL CONVEYOR LOGIC
         # =====================
-        if prev_x < LINE_X and cx >= LINE_X:
-            count += 1
-            logging.info(f"COUNTED OBJECT ID:{oid} | TOTAL:{count}")
+        if prev_side == "LEFT" and current_side == "RIGHT":
 
-        new_state[oid] = (cx, cy)
+            if oid not in counted:
+                count += 1
+                counted.add(oid)
 
-    tracked_objects = new_state
+                logger.info(f"COUNTED ID:{oid} TOTAL:{count}")
+
+        # update state
+        new_tracked[oid] = (cx, cy)
+        last_side[oid] = current_side
+
+    tracked = new_tracked
 
     # =====================
-    # BATCH LOGIC
+    # BATCH RESET
     # =====================
     if count >= 50:
         batch_id = batch_manager.new_batch()
-        logging.info(f"NEW BATCH: {batch_id}")
+        logger.info(f"NEW BATCH: {batch_id}")
+
         print(f"[INFO] NEW BATCH: {batch_id}")
+
         count = 0
+        counted.clear()
+        tracked.clear()
+        last_side.clear()
 
     # =====================
-    # INFLUX (ASYNC)
+    # INFLUX
     # =====================
     influx.write(result)
 
-    # =====================
-    # LOG FRAME DATA
-    # =====================
-    logging.info(
-        f"Batch:{batch_id} | "
-        f"Total:{result['total']} | "
-        f"Chip:{result['chip']} | "
-        f"Cap:{result['cap']} | "
-        f"Status:{result['status']}"
+    logger.info(
+        f"Batch:{batch_id} | Total:{result['total']} | "
+        f"Chip:{result['chip']} | Cap:{result['cap']} | Status:{result['status']}"
     )
 
     # =====================
-    # VISUALIZATION
+    # VISUALS
     # =====================
     annotated = results.plot()
 
-    # conveyor line
     cv2.line(annotated, (LINE_X, 0), (LINE_X, HEIGHT), (0, 255, 255), 2)
 
     cv2.putText(annotated, f"COUNT: {count}", (10, 20),
@@ -190,9 +200,7 @@ while True:
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6,
                 (0, 255, 0) if result["status"] == "PASS" else (0, 0, 255), 2)
 
-    # =====================
     # FPS
-    # =====================
     curr_time = time.time()
     fps = 1 / max(curr_time - prev_time, 1e-6)
     prev_time = curr_time
@@ -211,4 +219,4 @@ while True:
 cap.release()
 cv2.destroyAllWindows()
 influx.stop()
-logging.info("System stopped")
+logger.info("System stopped")
