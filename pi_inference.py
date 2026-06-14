@@ -45,7 +45,7 @@ def send_log(event, data):
     if not log_socket:
         return
     try:
-        payload = {"event": event, **data, "ts": time.time()}
+        payload = {"event": event, "ts": time.time(), **data}
         log_socket.sendall((json.dumps(payload) + "\n").encode())
     except:
         pass
@@ -54,10 +54,9 @@ def send_log(event, data):
 # =====================
 # CAMERA
 # =====================
-IP_URL = "http://192.168.100.6:8080/video"
-cap = cv2.VideoCapture(IP_URL,cv2.CAP_FFMPEG)
-# cap = cv2.VideoCapture(0)
-
+# IP_URL = "http://192.168.100.6:8080/video"
+# cap = cv2.VideoCapture(IP_URL, cv2.CAP_FFMPEG)
+cap = cv2.VideoCapture(0)
 if not cap.isOpened():
     raise RuntimeError("Camera not accessible")
 
@@ -71,7 +70,6 @@ influx.start()
 # STATE
 # =====================
 frame_count = 0
-seen_ids = set()
 tablet_results = {}
 
 batch_id = 1
@@ -81,6 +79,16 @@ pass_count = 0
 fail_count = 0
 
 prev_time = time.time()
+
+
+# =====================
+# HELPER: TRANSPARENT MASK
+# =====================
+def apply_mask_alpha(frame, mask, color, alpha=0.4):
+    overlay = frame.copy()
+    overlay[mask > 0] = color
+    return cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
+
 
 # =====================
 # LOOP
@@ -103,7 +111,7 @@ while True:
     prev_time = now
 
     # =====================
-    # STAGE 1
+    # STAGE 1 (UNCHANGED)
     # =====================
     results1 = stage1(frame, imgsz=IMGSZ1, conf=CONF1, verbose=False)
 
@@ -126,7 +134,7 @@ while True:
     detections = []
 
     # =====================
-    # STAGE 2 (IMPORTANT FIXED)
+    # STAGE 2 (UNCHANGED LOGIC)
     # =====================
     for (x1, y1, x2, y2) in tablets:
 
@@ -166,17 +174,38 @@ while True:
                 full_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
                 full_mask[y1e:y2e, x1e:x2e] = (mask > 0.5).astype(np.uint8)
 
-                if name in ["chip", "cap"]:
+                # =====================
+                # MASK VISUAL FIX (TRANSPARENT)
+                # =====================
+                if name == "chip":
+                    color = (0, 255, 0)  # green
                     status = "FAIL"
-                    defect = name
+                    defect = "chip"
 
-                    color = (0, 255, 0) if name == "chip" else (0, 0, 255)
+                elif name == "cap":
+                    color = (0, 0, 255)  # red
+                    status = "FAIL"
+                    defect = "cap"
+                else:
+                    continue
 
-                    # IMPORTANT: SAME AS YOUR WORKING FILE
-                    display[full_mask > 0] = color
+                display = apply_mask_alpha(display, full_mask, color, alpha=0.45)
 
-        # store result
         detections.append({"status": status, "defect": defect})
+
+        # =====================
+        # LIVE LOG PER TABLET (FIX)
+        # =====================
+        send_log("TABLET_RESULT", {
+            "batch": batch_id,
+            "status": status,
+            "defect": defect
+        })
+
+        if status == "PASS":
+            pass_count += 1
+        else:
+            fail_count += 1
 
     # =====================
     # ANALYTICS
@@ -186,9 +215,10 @@ while True:
     influx.write(result)
 
     # =====================
-    # BATCH + LIVE LOG
+    # BATCH LOG
     # =====================
     total = pass_count + fail_count
+
     if total >= batch_limit:
         send_log("BATCH_UPDATE", {
             "batch": batch_id,
@@ -196,12 +226,13 @@ while True:
             "fail": fail_count,
             "fps": fps
         })
+
         batch_id += 1
         pass_count = 0
         fail_count = 0
 
     # =====================
-    # DISPLAY
+    # UI
     # =====================
     cv2.putText(display, f"FPS:{int(fps)}", (10, 20),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
