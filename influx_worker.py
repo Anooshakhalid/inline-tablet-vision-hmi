@@ -4,7 +4,7 @@ from database.db import save_to_influx
 
 class InfluxWorker:
     def __init__(self):
-        self.queue = Queue(maxsize=200)
+        self.queue = Queue(maxsize=1000)
         self.running = True
         self.thread = None
 

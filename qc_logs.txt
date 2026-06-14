@@ -1,1 +1,2 @@
 NEW_BATCH:2
+{"event": "test", "message": "Hello from client"}
