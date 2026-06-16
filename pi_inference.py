@@ -28,7 +28,7 @@ stage2 = YOLO("models/new_m_2.pt")
 # =====================
 # SOCKET (SAFE + RECONNECT)
 # =====================
-PC_IP = "192.168.100.175"
+PC_IP = "10.224.237.113"
 PORT = 9999
 
 
