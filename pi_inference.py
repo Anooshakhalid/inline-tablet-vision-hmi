@@ -28,7 +28,7 @@ stage2 = YOLO("models/new_m_2.pt")
 # =====================
 # SOCKET (SAFE + RECONNECT)
 # =====================
-PC_IP = "10.224.237.113"
+PC_IP = "10.52.20.113"
 PORT = 9999
 
 
@@ -66,8 +66,10 @@ def send_log(event, data):
 # CAMERA
 # =====================
 cap = cv2.VideoCapture(1)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+# cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+# cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
 if not cap.isOpened():
