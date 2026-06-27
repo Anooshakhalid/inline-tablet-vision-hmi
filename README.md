@@ -49,12 +49,13 @@ if you want dataset, kindly contact at anooshakhalid999@gmail.com
 
 
 ## Detection Results
-![Results](images/detection.png)
-![Results](images/live_stream.png)
+![Realtime](images/detection.png)
+![Cumulative Result](images/live_stream.png)
 
 
 ## Demo Video
 [Demo Video](videos/Demo.mp4)
+[WHAT is our project](videos/Tablet-qc.mp4)
 
 
 ## Dashboard Preview:
